@@ -1,3 +1,6 @@
+# cmux / claude
+.fresh/
+
 # Node
 node_modules/
 dist/
