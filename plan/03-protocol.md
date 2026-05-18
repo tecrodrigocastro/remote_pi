@@ -29,7 +29,7 @@ Este é o primeiro plano que **toca múltiplos subprojetos simultaneamente** —
 | Versionamento | **Sem campo `v` no MVP** | v1 implícito. Adicionar `v` quando v2 surgir e cobrir migração |
 | Limite de tamanho | 1 MiB por mensagem inner (decidido aqui) | Suficiente pra diffs gordos; relay rejeita maior |
 | Erros | Tipo `error` com `code`, `message`, opcional `in_reply_to` | |
-| Heartbeat | Cliente envia `ping` a cada 25s, servidor responde `pong` | WebSocket idle timeout em CDN típico é 60s |
+| Heartbeat | Qualquer lado pode iniciar `ping` após 25s de idle; outro responde `pong` | WebSocket idle timeout em CDN típico é 60s. Bidirecional para detectar morte em qualquer ponta |
 
 ---
 
@@ -167,13 +167,15 @@ sobre arquivos fora do seu cwd.
 | `session_list` | `in_reply_to`, `sessions: [{ id, title, last_activity, is_live, owner_pid? }]` | Resposta |
 | `session_history` | `in_reply_to`, `session_id`, `entries: [...]` | Resposta |
 | `active_session_changed` | `session_id` | Push ou resposta |
-| `agent_chunk` | `in_reply_to`, `delta` | Push streaming |
-| `agent_done` | `in_reply_to`, `usage?` | Push terminal |
-| `tool_request` | `tool_call_id`, `tool`, `args` | Push (espera `approve_tool`) |
-| `tool_result` | `tool_call_id`, `result?`, `error?` | Push após approve |
+| `agent_chunk` | `in_reply_to`, `session_id`, `delta` | Push streaming |
+| `agent_done` | `in_reply_to`, `session_id`, `usage?` | Push terminal |
+| `tool_request` | `session_id`, `tool_call_id`, `tool`, `args` | Push (espera `approve_tool`) |
+| `tool_result` | `session_id`, `tool_call_id`, `result?`, `error?` | Push após approve |
 | `error` | `in_reply_to?`, `code`, `message` | Qualquer falha |
 | `cancelled` | `in_reply_to`, `target_id` | Push após cancel |
 | `pong` | `in_reply_to` | Resposta ao ping |
+
+> **Por que `session_id` em push?** Pi-extension serve um único Pi process, mas o app pode receber chunk de uma sessão recém-trocada (race com `switch_session`) ou exibir background. `session_id` desambígua sem custo. Vale também para `tool_request`/`tool_result` (tools nascem em qualquer turno do agente, não só na resposta direta à `user_message`).
 
 ### Exemplos (fixtures que cada subprojeto consome)
 
@@ -184,14 +186,14 @@ sobre arquivos fora do seu cwd.
 
 `contracts/fixtures/agent_chunk.jsonl` (sequência):
 ```json
-{"type":"agent_chunk","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","delta":"Vou olhar o "}
-{"type":"agent_chunk","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","delta":"middleware..."}
-{"type":"agent_done","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","usage":{"input_tokens":120,"output_tokens":340}}
+{"type":"agent_chunk","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","session_id":"sess_018f9c29","delta":"Vou olhar o "}
+{"type":"agent_chunk","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","session_id":"sess_018f9c29","delta":"middleware..."}
+{"type":"agent_done","in_reply_to":"018f9c2a-7b1e-7000-9a3b-1c2d3e4f5a6b","session_id":"sess_018f9c29","usage":{"input_tokens":120,"output_tokens":340}}
 ```
 
 `contracts/fixtures/tool_request.jsonl`:
 ```json
-{"type":"tool_request","tool_call_id":"tc_018f9c2b","tool":"Bash","args":{"command":"rm -rf node_modules"}}
+{"type":"tool_request","session_id":"sess_018f9c29","tool_call_id":"tc_018f9c2b","tool":"Bash","args":{"command":"rm -rf node_modules"}}
 {"type":"approve_tool","id":"018f9c2c-...","tool_call_id":"tc_018f9c2b","decision":"deny"}
 ```
 
@@ -205,9 +207,14 @@ sobre arquivos fora do seu cwd.
 | `session_locked` | Sessão está ativa em outro processo Pi |
 | `not_active_session` | Tentou mandar `user_message` numa sessão não-ativa |
 | `tool_approval_required` | Tool call esperando approval; tentar de novo após `approve_tool` |
-| `invalid_message` | Inner envelope mal formado |
+| `invalid_message` | Inner envelope mal formado (JSON inválido ou campos faltando) |
+| `unsupported_type` | `type` não reconhecido pelo receiver (forward-compat) |
 | `too_large` | `ct` > 1 MiB no outer |
 | `rate_limited` | Cliente excedeu rate limit |
+| `timeout` | Operação interna excedeu prazo (ex: tool sem `approve_tool` em 60s) |
+| `internal_error` | Falha não esperada no servidor; ver logs do Pi |
+
+`ErrorCode` é **aberto**: receivers devem tolerar codes desconhecidos (tratar como genérico) para forward-compat. Reflita isso no tipo TS (`ErrorCode | (string & {})`).
 
 **Critério de aceite**:
 - `protocol.md` existe com seções acima
@@ -239,10 +246,10 @@ export type ServerMessage =
   | { type: "session_list"; in_reply_to: string; sessions: SessionSummary[] }
   | { type: "session_history"; in_reply_to: string; session_id: string; entries: unknown[] }
   | { type: "active_session_changed"; session_id: string }
-  | { type: "agent_chunk"; in_reply_to: string; delta: string }
-  | { type: "agent_done"; in_reply_to: string; usage?: Usage }
-  | { type: "tool_request"; tool_call_id: string; tool: string; args: unknown }
-  | { type: "tool_result"; tool_call_id: string; result?: unknown; error?: string }
+  | { type: "agent_chunk"; in_reply_to: string; session_id: string; delta: string }
+  | { type: "agent_done"; in_reply_to: string; session_id: string; usage?: Usage }
+  | { type: "tool_request"; session_id: string; tool_call_id: string; tool: string; args: unknown }
+  | { type: "tool_result"; session_id: string; tool_call_id: string; result?: unknown; error?: string }
   | { type: "error"; in_reply_to?: string; code: ErrorCode; message: string }
   | { type: "cancelled"; in_reply_to: string; target_id: string }
   | { type: "pong"; in_reply_to: string };
@@ -257,58 +264,103 @@ export type SessionSummary = {
 
 export type Usage = { input_tokens: number; output_tokens: number };
 
-export type ErrorCode =
+export type KnownErrorCode =
   | "unknown_session"
   | "session_locked"
   | "not_active_session"
   | "tool_approval_required"
   | "invalid_message"
+  | "unsupported_type"
   | "too_large"
-  | "rate_limited";
+  | "rate_limited"
+  | "timeout"
+  | "internal_error";
+
+// aberto para forward-compat — receivers toleram codes desconhecidos
+export type ErrorCode = KnownErrorCode | (string & {});
 ```
 
-**`codec.ts`** — encode/decode com narrow guard:
+**`codec.ts`** — encode/decode com guard manual real:
 ```typescript
+const SERVER_TYPES = new Set<ServerMessage["type"]>([
+  "session_list", "session_history", "active_session_changed",
+  "agent_chunk", "agent_done", "tool_request", "tool_result",
+  "error", "cancelled", "pong",
+]);
+
+export class DecodeError extends Error {
+  constructor(public code: "invalid_message" | "unsupported_type", message: string) {
+    super(message);
+  }
+}
+
 export function encodeClient(msg: ClientMessage): string {
   return JSON.stringify(msg) + "\n";
 }
 
 export function decodeServer(line: string): ServerMessage {
-  const obj = JSON.parse(line);
-  // narrow guard: rejeita se !type ou type fora do union conhecido
+  let obj: unknown;
+  try {
+    obj = JSON.parse(line);
+  } catch (e) {
+    throw new DecodeError("invalid_message", `not JSON: ${(e as Error).message}`);
+  }
+  if (!obj || typeof obj !== "object" || typeof (obj as any).type !== "string") {
+    throw new DecodeError("invalid_message", "missing 'type'");
+  }
+  const t = (obj as any).type as string;
+  if (!SERVER_TYPES.has(t as ServerMessage["type"])) {
+    throw new DecodeError("unsupported_type", `unknown type: ${t}`);
+  }
+  // (futuro: validar campos por type. Hoje o guard de type já evita lixo grosseiro)
   return obj as ServerMessage;
 }
 ```
 
-**`codec.test.ts`** — roundtrip + fixtures:
+**`codec.test.ts`** — roundtrip + fixtures (vitest):
 ```typescript
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+import { decodeServer, DecodeError } from "./codec";
 
 const fixtureDir = join(__dirname, "../../../.orchestration/contracts/fixtures");
 
-for (const file of readdirSync(fixtureDir)) {
-  test(`decode ${file}`, () => {
-    const content = readFileSync(join(fixtureDir, file), "utf8");
-    for (const line of content.split("\n").filter(Boolean)) {
-      const decoded = JSON.parse(line);
-      expect(typeof decoded.type).toBe("string");
-    }
+describe("decode fixtures", () => {
+  for (const file of readdirSync(fixtureDir)) {
+    test(`decode ${file}`, () => {
+      const content = readFileSync(join(fixtureDir, file), "utf8");
+      for (const line of content.split("\n").filter(Boolean)) {
+        // pelo menos não-lança; futuras fixtures podem cobrir só ServerMessage
+        try { decodeServer(line); } catch (e) {
+          if (!(e instanceof DecodeError && e.code === "unsupported_type")) throw e;
+        }
+      }
+    });
+  }
+
+  test("rejects junk", () => {
+    expect(() => decodeServer("not json")).toThrow(DecodeError);
+    expect(() => decodeServer('{"foo":1}')).toThrow(/missing 'type'/);
+    expect(() => decodeServer('{"type":"made_up"}')).toThrow(/unknown type/);
   });
-}
+});
 ```
 
-**Dependência nova**: `vitest` ou `node:test` built-in. Usar `node:test` pra evitar dep nova:
+**Dependência nova**: `vitest` (decisão fechada — não usar `node:test` built-in).
 ```bash
 cd pi-extension
-# Adicionar script "test": "node --test src/**/*.test.ts" no package.json
+pnpm add -D vitest
+# script no package.json: "test": "vitest run"
 ```
 
 **Critério de aceite**:
 - `pnpm typecheck` passa
 - `pnpm build` gera os tipos
-- `pnpm test` (a configurar) roda contra fixtures e cada uma desserializa
+- `pnpm test` (vitest) roda contra fixtures e cada uma desserializa
+- Test "rejects junk" demonstra `DecodeError` em JSON inválido, falta de `type`, e `type` desconhecido
 - TypeScript reclama em compile-time se omitir um campo obrigatório
+- `ErrorCode` permite valor desconhecido sem erro de compilação (forward-compat)
 
 ---
 
@@ -350,12 +402,32 @@ sealed class ServerMessage {
         return AgentChunk.fromJson(json);
       // ... demais
       default:
-        throw FormatException('unknown server type: ${json['type']}');
+        // forward-compat: callers tratam como aviso/log, não fatal
+        throw const UnsupportedTypeException();
     }
   }
 }
 
-// ... subclasses
+class UnsupportedTypeException implements Exception {
+  const UnsupportedTypeException();
+}
+
+// Exemplo: push streaming já carrega session_id
+class AgentChunk extends ServerMessage {
+  final String inReplyTo;
+  final String sessionId;
+  final String delta;
+  AgentChunk({required this.inReplyTo, required this.sessionId, required this.delta});
+
+  factory AgentChunk.fromJson(Map<String, dynamic> j) => AgentChunk(
+    inReplyTo: j['in_reply_to'] as String,
+    sessionId: j['session_id'] as String,
+    delta: j['delta'] as String,
+  );
+}
+
+// ToolRequest, ToolResult, AgentDone seguem mesmo padrão: campo sessionId obrigatório
+// ... demais subclasses
 ```
 
 **`codec.dart`** — encode/decode:
@@ -374,19 +446,31 @@ void main() {
     await for (final f in dir.list()) {
       final lines = await File(f.path).readAsLines();
       for (final line in lines.where((l) => l.isNotEmpty)) {
-        // só verifica que parseia
-        final msg = decodeServer(line);
-        expect(msg, isNotNull);
+        // só verifica que parseia (ignora tipos client-only e desconhecidos)
+        try {
+          final msg = decodeServer(line);
+          expect(msg, isNotNull);
+        } on UnsupportedTypeException {
+          // ok — fixtures podem conter tipos client
+        }
       }
     }
+  });
+
+  test('AgentChunk requires session_id', () {
+    final j = {'type': 'agent_chunk', 'in_reply_to': 'x', 'session_id': 's1', 'delta': 'hi'};
+    final msg = ServerMessage.fromJson(j);
+    expect(msg, isA<AgentChunk>());
+    expect((msg as AgentChunk).sessionId, 's1');
   });
 }
 ```
 
 **Critério de aceite**:
 - `flutter analyze` zero issues
-- `flutter test` passa (pelo menos 1 teste novo)
+- `flutter test` passa (pelo menos 2 testes novos)
 - Sealed switch é exhaustive (compilador reclama se faltar caso)
+- Tipos push têm `sessionId` obrigatório (compile-time)
 
 ---
 
@@ -413,7 +497,10 @@ pub struct OuterEnvelope {
     pub ct: String, // base64 — nunca decodificado aqui
 }
 
-pub const MAX_CT_BYTES: usize = 1024 * 1024; // 1 MiB
+// 1 MiB do ciphertext base64-decoded. O inner real é ligeiramente menor por
+// overhead de cifra (tag Poly1305 + nonce, ~32 bytes). Relay não sabe nem
+// precisa saber o tamanho exato do inner — só protege o duto.
+pub const MAX_CT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -437,7 +524,7 @@ pub fn parse_line(line: &str) -> Result<OuterEnvelope, ParseError> {
 ```bash
 cd relay
 cargo add thiserror
-cargo add base64
+# base64 NÃO entra: relay nunca decodifica ct, só mede len() do string base64
 ```
 
 **`outer_test.rs`** (ou inline `#[cfg(test)]`):
@@ -488,14 +575,16 @@ Não há comparação automatizada cross-linguagem no MVP. A confiança vem de:
 
 ## Definition of Done
 
-- [ ] `.orchestration/INSTRUCTIONS.md` existe e está coerente com gatilho `[ORCH:]` nos CLAUDE.md
-- [ ] `.orchestration/contracts/protocol.md` cobre outer + inner + todos os tipos listados
-- [ ] `.orchestration/contracts/fixtures/` tem 1 fixture por `type` (≥ 12 arquivos)
+- [x] `.orchestration/INSTRUCTIONS.md` existe e está coerente com gatilho `[ORCH:]` nos CLAUDE.md
+- [ ] `.orchestration/contracts/protocol.md` cobre outer + inner + todos os tipos listados, incluindo `session_id` em push messages e tabela de erros estendida
+- [ ] `.orchestration/contracts/fixtures/` tem 1 fixture por `type` (≥ 12 arquivos); fixtures de push carregam `session_id`
 - [ ] `pi-extension/src/protocol/{types,codec,codec.test}.ts` implementados
-- [ ] `pnpm test` rodando no pi-extension (script novo) e passando contra fixtures
-- [ ] `app/lib/protocol/{protocol,codec}.dart` implementados, sealed switch exhaustive
-- [ ] `app/test/protocol_test.dart` passa contra mesmas fixtures
-- [ ] `relay/src/protocol/outer.rs` parseia outer envelope, rejeita > 1 MiB
+- [ ] `vitest` adicionado como devDep no pi-extension; script `"test": "vitest run"` no package.json
+- [ ] `pnpm test` passa contra fixtures e cobre rejeição de JSON inválido + type desconhecido (`DecodeError`)
+- [ ] `ErrorCode` é aberto (`KnownErrorCode | (string & {})`) — receivers toleram codes futuros
+- [ ] `app/lib/protocol/{protocol,codec}.dart` implementados, sealed switch exhaustive, push messages têm `sessionId` obrigatório
+- [ ] `app/test/protocol_test.dart` passa contra mesmas fixtures + teste explícito de `AgentChunk.sessionId`
+- [ ] `relay/src/protocol/outer.rs` parseia outer envelope, rejeita ct base64-decoded > 1 MiB
 - [ ] `cargo test` no relay passa (2+ tests)
 - [ ] `cargo clippy -- -D warnings` zero no relay
 - [ ] Commit: `protocol: outer + inner envelopes, JSONL framing, fixtures`
