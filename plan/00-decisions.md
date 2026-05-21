@@ -32,7 +32,9 @@ Numeração `00-` é proposital: este arquivo carrega antes dos planos numerados
 | **Safety number opcional** | 6 emojis bilateral (estilo Signal), pra confirmar visualmente que pareamento não foi MITM |
 | **Forward secrecy** | ECDH efêmero a cada reconexão. Chave de longo prazo (Curve25519) só pra autenticar identidade |
 | **Identidade = pubkey** | Sem username. Auth no relay via challenge-response (relay assina nonce, peer responde com assinatura da pubkey privada) |
-| **Lifetime do pareamento** | Até alguém revogar. Comando `/remote-pi revoke <nome>` (não no MVP, mas previsto) |
+| **Lifetime do pareamento** | Até alguém revogar. ~~Comando `/remote-pi revoke <nome>`~~ Comando `/remote-pi revoke <shortid>` (8 chars do epk) + tab completion — fechado 2026-05-19 (plano 08 Q3) |
+| **Revoke no app (fechado 2026-05-19, plano 08 Q4)** | Lista de peers em Settings com swipe-to-delete + modal de confirmação |
+| **Sinalização cross-side ao revogar (fechado 2026-05-19, plano 08 Q5)** | Propagação implícita: lado revogado limpa storage local; outro lado detecta via `error{unknown_peer}` na próxima reconexão. Sem novo tipo `revoke_pair` no protocolo |
 
 ## Escopo de visibilidade
 
@@ -47,6 +49,8 @@ Numeração `00-` é proposital: este arquivo carrega antes dos planos numerados
 
 | Cenário | Comportamento |
 |---|---|
+| **App pareado com N Pis (fechado 2026-05-19, plano 08 Q1)** | Sim — `peers.json` (Mac) e Keychain (mobile) já são listas. App mostra todos em Settings com switcher. Só 1 ativo por vez no `ConnectionManager` |
+| **Pi pareado com N devices (fechado 2026-05-19, plano 08 Q2)** | Opção C: storage suporta N (`peers.json`), **mas só 1 device conectado simultaneamente** (`_peerChannel` é singleton). Outros pareados ficam dormentes. Modelo broadcast/multi-ativo cortado por complexidade |
 | 2 terminais Pi na mesma pasta | Cada um gera QR próprio → 2 pareamentos independentes. Zero conflito (mantida — compatível com MVP 1-pareamento-1-sessão) |
 | ~~Pi A pediu `switch_session X`, X está LIVE em Pi B~~ | ~~`AgentSessionRuntime.resume(X)` lança `SessionLockedError`. App mostra "em uso em outro terminal"~~ (revertida 2026-05-18: sem switch_session no MVP) |
 | ~~Pi numa subpasta (`projeto-a/src`)~~ | ~~Resolve project root = `projeto-a/` via marcador → mesmo conjunto de sessões~~ (revertida 2026-05-18: sem project scope no MVP) |
@@ -70,10 +74,11 @@ Numeração `00-` é proposital: este arquivo carrega antes dos planos numerados
 | Decisão | Razão / nota |
 |---|---|
 | **Sem push notification no MVP** | Cortado pra eliminar burocracia APNs ($99/ano cert), FCM SDK, push token mgmt. Reconexão = on-demand quando user abre app |
-| **Auto-approve read-only** | `Read`, `Glob`, `Grep` rodam sem prompt. Fluxo do agente não trava em coisa segura |
-| **Approval obrigatório** | `Bash`, `Edit`, `Write` sempre param. App mostra diff/comando antes de aprovar |
-| **Timeout default 60s** | `on_timeout=abort`. Conservador: se user não respondeu, não execute |
-| **Quando push entrar (v2)** | Aditivo. Schema atual não muda. Relay decora `tool_request` com push fire |
+| ~~**Auto-approve read-only**~~ | ~~`Read`, `Glob`, `Grep` rodam sem prompt. Fluxo do agente não trava em coisa segura~~ Revogada 2026-05-19 (plano 10.2) |
+| ~~**Approval obrigatório**~~ | ~~`Bash`, `Edit`, `Write` sempre param. App mostra diff/comando antes de aprovar~~ Revogada 2026-05-19 (plano 10.2) |
+| ~~**Timeout default 60s**~~ | ~~`on_timeout=abort`. Conservador: se user não respondeu, não execute~~ Revogada 2026-05-19 (plano 10.2) |
+| **Sistema de approval removido do pi-ext (fechado 2026-05-19, plano 10.2 revisado)** | Tool calls executam direto. Razão: SDK do Pi não tem campo nativo `requiresApproval` por tool, e nosso gate hardcoded (Bash/Edit/Write) forçava approval em TODAS as tools custom de packages, gerando ruído e não escalando. Quando o ecossistema Pi padronizar permissions, religar via plano futuro. App mantém infra dormante (`ToolRequest` type + approval card) pra forward-compat. `tool_result` continua sendo enviado pra transparência |
+| **Quando push entrar (v2)** | Aditivo. Schema atual não muda. Relay decora `tool_request` com push fire (quando permissions voltarem) |
 
 ## Crypto / E2E (resumo — detalhe nos planos 04 e 06)
 

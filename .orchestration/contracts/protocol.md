@@ -35,8 +35,27 @@ realinhamento nos 3 lados.
                               ▲
                               │  framing JSONL (\n)
                               ▼
-                          WebSocket
+                          WebSocket  +  Control frames (plano 12)
 ```
+
+### Control frames (plano 12 — presence push)
+
+Além de envelopes opacos `{peer, ct}`, o WebSocket transporta **control
+frames** consumidos diretamente pelo relay (não roteados pra outro peer).
+Distinguíveis pelo campo `type` no topo do JSON em vez de `peer`+`ct`:
+
+```
+              app ⇄ relay (frames próprios, não opacos)
+┌──────────────────────────────────────────────────────────────────────┐
+│  Control: hello, auth, subscribe_presence, presence_check,            │
+│           peer_online (push), peer_offline (push), presence (resp)    │
+│  Relay parseia esses tipos e responde / faz push                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+Relay continua **opaco ao `ct`** dos envelopes — não decodifica payload
+de roteamento. Mas aprende a ler `hello`/`auth` (auth, já existia) e
+agora os 5 frames de presence.
 
 ---
 
@@ -86,7 +105,51 @@ longo prazo, idêntico ao que o peer enviou no `hello` do challenge-response
 
 ---
 
+## Control frames (relay, plano 12)
+
+Frames trafegados **direto na WS** (sem envelope `{peer, ct}`), consumidos
+pelo relay e/ou empurrados pelo relay. Identificáveis por `type` no topo.
+
+### App → Relay
+
+| `type` | Campos | Descrição |
+|---|---|---|
+| `hello` | `pubkey` (base64 Ed25519) | Auth — já existia (`pairing.md`) |
+| `auth` | `sig` (base64) | Auth — já existia |
+| `subscribe_presence` | `peers` (array de epk base64 standard) | Inscreve este peer pra receber `peer_online`/`peer_offline` dos epks listados. Idempotente: chamadas subsequentes substituem a lista. Lista vazia = unsubscribe all |
+| `unsubscribe_presence` | `peers` (array) | Remove subset de peers do subscribe (opcional — chamar `subscribe_presence` com lista nova é equivalente) |
+| `presence_check` | `peers` (array) | Pede snapshot pontual; relay responde com `presence` |
+
+### Relay → App
+
+| `type` | Campos | Descrição |
+|---|---|---|
+| `challenge` | `nonce` | Auth — já existia |
+| `peer_online` | `peer` (epk) | Push: peer subscrito acabou de autenticar |
+| `peer_offline` | `peer` (epk), `since_ts` (number, epoch ms) | Push: peer subscrito desconectou. `since_ts` é quando o disconnect aconteceu (relay knows) |
+| `presence` | `states: [{peer, online: bool, since_ts: number\|null}]` | Resposta a `presence_check`. `since_ts` é quando peer entrou neste estado (null se sempre offline / sempre online — relay define) |
+
+**Regras**:
+- Relay aceita subscribe sem validar identidade do peer alvo (zero-knowledge — qualquer epk pode ser monitorado)
+- Subscribers desconectados são removidos automaticamente das subscriptions
+- Broadcast acontece em `PeerRegistry.connect` (online) e `PeerRegistry.disconnect` (offline)
+- Sem batching/throttle no MVP — adicionado em plano futuro via env vars
+
+---
+
 ## Inner envelope — tipos do MVP
+
+> **Approval gate removido (plano 10.2 revisado, 2026-05-19)**: o pi-extension
+> do MVP **não usa** `approve_tool`. Tool calls executam direto, sem prompt.
+> Quando ecossistema Pi padronizar permissions, plano futuro religa o gate
+> sem mudar shape.
+>
+> **`tool_request` continua sendo emitido como notificação visual (plano 10.6,
+> 2026-05-19)**: pi-ext envia `tool_request` via evento `tool_execution_start`
+> do SDK assim que cada tool VAI executar — apenas pra app mostrar processo
+> na timeline. Não bloqueia execução, não espera `approve_tool`. App segue
+> recebendo `tool_result` no fim. Forward-compat: o tipo `approve_tool`
+> permanece no contrato mas é silenciosamente ignorado pelo pi-ext.
 
 Como 1 pareamento = 1 sessão Pi, **não há `session_id`** em mensagem
 nenhuma. Cada conexão peer↔peer já é exclusiva daquela sessão.
@@ -100,20 +163,25 @@ nenhuma. Cada conexão peer↔peer já é exclusiva daquela sessão.
 | `approve_tool` | `id`, `tool_call_id`, `decision: "allow" \| "deny"` | Não (continua o fluxo) |
 | `cancel` | `id`, `target_id` | Sim → `cancelled` ou `error` |
 | `ping` | `id` | Sim → `pong` |
+| `session_sync` | `id`, `limit` (number, opcional — default 30, server clampa contra próprio env) | Sim → `session_history` com últimas N (mirror, não delta). Pós-plano 16 simplificado: sem `since_ts`/`session_started_at` no request |
 
 ### Direção: extension → app (servidor)
 
 | `type` | Campos | Iniciado por |
 |---|---|---|
-| `pair_ok` | `in_reply_to`, `session_name` | Resposta ao `pair_request` válido |
+| `pair_ok` | `in_reply_to`, `session_name`, `session_started_at` (number, epoch ms) | Resposta ao `pair_request` válido |
 | `pair_error` | `in_reply_to`, `code`, `message` | Resposta ao `pair_request` inválido (ver `pairing.md`) |
+| `user_input` | `id`, `text` | Push — input que o user digitou no terminal Pi (ou via RPC). Permite app espelhar perguntas que não vieram dele. `id` correlaciona com `agent_chunk`/`agent_done` subsequentes (`in_reply_to = id`) |
 | `agent_chunk` | `in_reply_to`, `delta` | Push streaming |
 | `agent_done` | `in_reply_to`, `usage?` | Push terminal |
-| `tool_request` | `tool_call_id`, `tool`, `args` | Push (espera `approve_tool`) |
-| `tool_result` | `tool_call_id`, `result?`, `error?` | Push após approve |
+| `agent_message` | `in_reply_to`, `text`, `usage?` | Usado **apenas** em `session_history`: representa uma resposta consolidada do agente (texto final). Em real-time o pareamento é `agent_chunk`* + `agent_done` |
+| `tool_request` | `tool_call_id`, `tool`, `args` | Push (notificação visual; sem approval pós plano 10.2) |
+| `tool_result` | `tool_call_id`, `result?`, `error?` | Push após tool executar |
+| `session_history` | `in_reply_to`, `session_started_at` (number, diagnóstico), `events: [{ts, type, ...}]`, `eos` (bool), `truncated` (bool, plano 16) | Resposta a `session_sync` — **mirror das últimas N** (não delta). Eventos têm os mesmos shapes dos types acima (user_input, agent_message, tool_request, tool_result) com `ts` (epoch ms) adicional. Pós-plano 16: server sempre devolve em 1 frame (eos:true), `truncated` indica se Pi tem mais que o limit |
 | `error` | `in_reply_to?`, `code`, `message` | Qualquer falha não-pair |
 | `cancelled` | `in_reply_to`, `target_id` | Push após cancel |
 | `pong` | `in_reply_to` | Resposta ao ping |
+| `bye` | `reason: "peer_stop" \| "session_replaced" \| "shutdown"` | Push final antes de o pi fechar a conexão (graceful disconnect). App marca offline imediato e PARA tentativas de retry até user reconectar manualmente |
 
 ---
 
@@ -153,7 +221,8 @@ roda seu codec contra esses arquivos pra garantir que o shape bate em TS,
 Dart e Rust simultaneamente. Mudanças aqui são **breaking** — alinhar os
 3 codecs antes de comitar.
 
-Lista atual em `fixtures/` (13 arquivos):
-- **Pair (novos no plano 06)**: `pair_request.jsonl`, `pair_ok.jsonl`, `pair_error.jsonl`
-- **Client**: `user_message.jsonl`, `approve_tool.jsonl`, `cancel.jsonl`, `ping.jsonl`
-- **Server**: `agent_stream.jsonl` (sequência de chunks + done), `tool_request.jsonl`, `tool_result.jsonl`, `error.jsonl`, `cancelled.jsonl`, `pong.jsonl`
+Lista atual em `fixtures/` (24 arquivos):
+- **Pair (novos no plano 06)**: `pair_request.jsonl`, `pair_ok.jsonl` (com `session_started_at` desde plano 11), `pair_error.jsonl`
+- **Client (inner)**: `user_message.jsonl`, `approve_tool.jsonl`, `cancel.jsonl`, `ping.jsonl`, `session_sync.jsonl` (plano 11)
+- **Server (inner)**: `agent_stream.jsonl` (sequência de chunks + done), `user_input.jsonl` (plano 10.5), `agent_message.jsonl` (plano 11, usado em history), `tool_request.jsonl`, `tool_result.jsonl`, `session_history.jsonl` (plano 11), `error.jsonl`, `cancelled.jsonl`, `pong.jsonl`, `bye.jsonl`
+- **Control frames (plano 12, fora do envelope)**: `subscribe_presence.jsonl`, `unsubscribe_presence.jsonl`, `presence_check.jsonl`, `peer_online.jsonl`, `peer_offline.jsonl`, `presence.jsonl`

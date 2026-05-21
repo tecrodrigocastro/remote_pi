@@ -97,6 +97,13 @@ fi
 full_prompt="[ORCH:${task_id}] ${prompt}"
 
 cmux send     --surface "$sid" -- "$full_prompt" >/dev/null
+
+# Pequena pausa pro TUI do claude no destino terminar de processar o paste
+# antes do Enter chegar — sem isso, prompts grandes (>2KB) racing com o
+# bracketed-paste mode fazem o Enter virar newline no buffer em vez de
+# submit. Sintoma: prompt fica grudado na caixa de texto, "pula linha".
+sleep 0.4
+
 cmux send-key --surface "$sid" enter >/dev/null
 
 printf "ok  %-10s %s\n     [ORCH:%s] %s\n" "$pane" "$sid" "$task_id" "$prompt"
