@@ -25,7 +25,7 @@ export default function DocsPage() {
   return (
     <DocsShell
       title="Remote Pi docs"
-      lastUpdated="2026-05-22"
+      lastUpdated="2026-05-24"
       sidebar={<DocsToc />}
       intro={
         <p>
@@ -199,6 +199,28 @@ export default function DocsPage() {
           It should print the effective relay URL and where it came from
           (<InlineCode>env</InlineCode> / <InlineCode>config</InlineCode> /{" "}
           <InlineCode>default</InlineCode>).
+        </p>
+        <p>
+          <strong className="text-fg">Planning to use daemon mode?</strong>{" "}
+          Also install the package globally via npm — that puts the{" "}
+          <InlineCode>remote-pi</InlineCode> and{" "}
+          <InlineCode>pi-supervisord</InlineCode> binaries on your PATH. The
+          two installs are independent and can coexist:
+        </p>
+        <CodeBlock
+          code="npm install -g remote-pi"
+          label="Optional · for daemon mode"
+          language="bash"
+        />
+        <p>
+          <InlineCode>pi install npm:remote-pi</InlineCode> exposes the
+          extension to the Pi runtime. <InlineCode>npm install -g remote-pi</InlineCode>{" "}
+          additionally drops two CLI binaries on your PATH that the daemon
+          flow needs. See{" "}
+          <a href="#daemon-mode" className="text-accent underline">
+            Daemon mode
+          </a>{" "}
+          for the rest.
         </p>
       </DocsSection>
 
@@ -443,31 +465,286 @@ agent_request({
         </p>
       </DocsSection>
 
+      <DocsSection id="daemon-mode" title="Daemon mode">
+        <p>
+          When you want a Pi to keep running in the background — responding to
+          mobile prompts at 3am, processing cron jobs, monitoring a folder
+          while you&apos;re not at the keyboard — promote it to a{" "}
+          <strong className="text-fg">daemon</strong> managed by a single
+          OS-level supervisor. systemd on Linux, launchd on macOS; one
+          supervisor process per machine, N background Pis underneath.
+        </p>
+
+        <DocsSubsection id="daemon-prereq" title="One-time setup">
+          <p>
+            Install the package globally so <InlineCode>remote-pi</InlineCode>{" "}
+            and <InlineCode>pi-supervisord</InlineCode> are on your PATH.{" "}
+            <InlineCode>pi install npm:remote-pi</InlineCode> alone makes the
+            Pi extension available but does <strong className="text-fg">not</strong>{" "}
+            expose the CLI binaries — both installs are independent and can
+            coexist.
+          </p>
+          <CodeBlock
+            code={`# Put the CLI on your PATH.
+npm install -g remote-pi
+
+# Install the supervisor as a user-level system service.
+# Linux: systemd --user, macOS: launchd LaunchAgent.
+# Both auto-start at login and survive reboots.
+remote-pi install`}
+            label="One-time setup"
+            language="bash"
+          />
+          <p>
+            <InlineCode>remote-pi install</InlineCode>:
+          </p>
+          <ul className="ml-6 list-disc space-y-2">
+            <li>
+              Writes{" "}
+              <InlineCode>~/.config/systemd/user/remote-pi-supervisord.service</InlineCode>{" "}
+              (Linux) or{" "}
+              <InlineCode>~/Library/LaunchAgents/dev.remotepi.supervisord.plist</InlineCode>{" "}
+              (macOS).
+            </li>
+            <li>
+              Activates via{" "}
+              <InlineCode>systemctl --user enable --now</InlineCode> or{" "}
+              <InlineCode>launchctl bootstrap</InlineCode>.
+            </li>
+            <li>
+              The supervisor starts immediately and re-starts on every login.
+            </li>
+          </ul>
+        </DocsSubsection>
+
+        <DocsSubsection id="daemon-per-folder" title="Per-folder workflow">
+          <p>For each agent you want to keep alive 24/7:</p>
+          <CodeBlock
+            code={`# 1. Configure the agent interactively first (one time).
+cd ~/Movies
+pi                                 # /remote-pi → setup wizard, /remote-pi pair, etc
+
+# 2. Promote to a daemon. The id is derived from the cwd
+#    (sha256(realpath)[:8]), stable across machines.
+remote-pi create ~/Movies --name "Video Editor"
+# → Daemon registered: id=4e39152d name="Video Editor" cwd=/Users/x/Movies
+
+# 3. Start it (supervisor spawns 'pi --mode rpc' for this folder).
+remote-pi daemon start`}
+            label="Per-folder flow"
+            language="bash"
+          />
+          <p>
+            The agent receives prompts as if a user typed them; its response
+            flows back through the relay/mesh you configured during interactive
+            setup — the mobile app sees it live, other agents on the same
+            machine see it via the local UDS mesh.
+          </p>
+        </DocsSubsection>
+
+        <DocsSubsection id="daemon-fleet" title="Fleet operations">
+          <p>Once daemons are registered:</p>
+          <CodeBlock
+            code={`remote-pi daemons                  # list daemons + state
+remote-pi daemon status            # uptime, pid, restart count
+remote-pi daemon send 4e39152d "Cut the first 30 seconds of latest clip"
+remote-pi daemon stop              # stop all
+remote-pi daemon restart           # restart all`}
+            label="Fleet commands"
+            language="bash"
+          />
+          <p>
+            All commands also work as Pi slash commands (interactive){" "}
+            <strong className="text-fg">and</strong> as shell-level{" "}
+            <InlineCode>remote-pi &lt;subcommand&gt;</InlineCode> when installed
+            globally.
+          </p>
+        </DocsSubsection>
+
+        <DocsSubsection id="daemon-remove" title="Removing or uninstalling">
+          <CodeBlock
+            code={`remote-pi remove <id>              # unregister one daemon (config preserved)
+remote-pi uninstall                # remove the supervisor service (registry kept)`}
+            label="Cleanup"
+            language="bash"
+          />
+          <p>
+            <InlineCode>uninstall</InlineCode> is reversible — re-running{" "}
+            <InlineCode>install</InlineCode> later brings every registered
+            daemon back. To wipe the registry entirely:
+          </p>
+          <CodeBlock
+            code="rm ~/.pi/remote/daemons.json"
+            label="Nuke the registry"
+            language="bash"
+          />
+        </DocsSubsection>
+
+        <DocsSubsection id="daemon-logs" title="Where to find logs">
+          <DocsTable
+            headers={["Platform", "Command"]}
+            rows={[
+              [
+                "Linux",
+                <InlineCode key="l">
+                  journalctl --user -u remote-pi-supervisord -f
+                </InlineCode>,
+              ],
+              [
+                "macOS",
+                <InlineCode key="m">
+                  tail -f ~/.pi/remote/supervisord.log
+                </InlineCode>,
+              ],
+            ]}
+          />
+          <p>
+            Each spawned daemon&apos;s stderr is forwarded into the
+            supervisor&apos;s log with a <InlineCode>[&lt;cwd&gt;]</InlineCode>{" "}
+            prefix, so a single stream shows every agent.
+          </p>
+        </DocsSubsection>
+
+        <DocsSubsection id="daemon-caveats" title="Caveats">
+          <ul className="ml-6 list-disc space-y-2">
+            <li>
+              <strong className="text-fg">Tool approval is not gated.</strong>{" "}
+              Daemons inherit the same Pi config the interactive run uses —
+              Bash, Edit, Write, etc. all execute without prompting. Configure
+              Pi&apos;s tool permissions to taste{" "}
+              <em>before</em> promoting a folder to daemon. A tool-approval
+              gate ships in a follow-up plan.
+            </li>
+            <li>
+              <strong className="text-fg">Pairing is still interactive.</strong>{" "}
+              Daemons don&apos;t show a QR themselves; the keypair and paired
+              devices come from the prior interactive <InlineCode>pi</InlineCode>{" "}
+              session in the same folder.
+            </li>
+            <li>
+              <strong className="text-fg">Single supervisor.</strong> If{" "}
+              <InlineCode>pi-supervisord</InlineCode> crashes, every daemon
+              goes down with it. systemd/launchd restarts it within seconds and
+              the children come back automatically.
+            </li>
+            <li>
+              <strong className="text-fg">One daemon per cwd.</strong> The
+              by-path id derivation rejects a second daemon in the same folder
+              at <InlineCode>create</InlineCode> time.
+            </li>
+          </ul>
+        </DocsSubsection>
+      </DocsSection>
+
       <DocsSection id="commands" title="Command reference">
-        <DocsTable
-          headers={["Command", "Description"]}
-          rows={[
-            [<InlineCode key="c">/remote-pi</InlineCode>, "Connect (join session + start relay), or run setup on first use"],
-            [<InlineCode key="c">/remote-pi setup</InlineCode>, "Run the setup wizard and update local config"],
-            [<InlineCode key="c">/remote-pi join [name]</InlineCode>, "Join (or create) a local agent session"],
-            [<InlineCode key="c">/remote-pi leave</InlineCode>, "Leave the current agent session"],
-            [<InlineCode key="c">/remote-pi rename &lt;name&gt;</InlineCode>, "Rename this agent in the current session"],
-            [<InlineCode key="c">/remote-pi sessions</InlineCode>, "List local agent sessions"],
-            [<InlineCode key="c">/remote-pi relay</InlineCode>, "Toggle the relay connection on/off"],
-            [<InlineCode key="c">/remote-pi relay start</InlineCode>, "Connect to the relay"],
-            [<InlineCode key="c">/remote-pi relay stop</InlineCode>, "Disconnect from the relay"],
-            [<InlineCode key="c">/remote-pi relay status</InlineCode>, "Show current relay status"],
-            [
-              <InlineCode key="c">/remote-pi relay url &lt;url&gt;</InlineCode>,
-              <>Set the relay URL (alias of <InlineCode>/remote-pi set-relay</InlineCode>)</>,
-            ],
-            [<InlineCode key="c">/remote-pi pair</InlineCode>, "Show a QR code to pair a new mobile device"],
-            [<InlineCode key="c">/remote-pi devices</InlineCode>, "List paired mobile devices"],
-            [<InlineCode key="c">/remote-pi revoke &lt;shortid&gt;</InlineCode>, "Revoke a paired device by its shortid"],
-            [<InlineCode key="c">/remote-pi set-relay &lt;url&gt;</InlineCode>, "Persist a new relay URL to user config"],
-            [<InlineCode key="c">/remote-pi config</InlineCode>, "Show the effective relay URL and its source"],
-          ]}
-        />
+        <p>
+          Every command works as a Pi slash command (interactive) and as a
+          shell-level <InlineCode>remote-pi &lt;subcommand&gt;</InlineCode>{" "}
+          when the package is installed globally (
+          <InlineCode>npm install -g remote-pi</InlineCode>).
+        </p>
+
+        <DocsSubsection
+          id="commands-local"
+          title="Local session — one Pi, one terminal"
+        >
+          <DocsTable
+            headers={["Command", "Description"]}
+            rows={[
+              [
+                <InlineCode key="c">/remote-pi</InlineCode>,
+                "Connect (join local mesh + start relay), or run setup on first use",
+              ],
+              [
+                <InlineCode key="c">/remote-pi setup</InlineCode>,
+                "Run the setup wizard and update local config",
+              ],
+              [
+                <InlineCode key="c">/remote-pi status</InlineCode>,
+                "Show local mesh + relay status",
+              ],
+              [
+                <InlineCode key="c">/remote-pi stop</InlineCode>,
+                <>Stop everything for <em>this</em> terminal (mesh + relay)</>,
+              ],
+              [
+                <InlineCode key="c">/remote-pi pair</InlineCode>,
+                "Show QR + copy-paste pairing URI for a new mobile device",
+              ],
+              [
+                <InlineCode key="c">/remote-pi devices</InlineCode>,
+                "List paired mobile devices (online/offline per device)",
+              ],
+              [
+                <InlineCode key="c">/remote-pi revoke &lt;shortid&gt;</InlineCode>,
+                "Revoke a paired device by its shortid",
+              ],
+              [
+                <InlineCode key="c">/remote-pi set-relay &lt;url&gt;</InlineCode>,
+                "Persist a new relay URL (http:// or https://)",
+              ],
+            ]}
+          />
+        </DocsSubsection>
+
+        <DocsSubsection
+          id="commands-daemon"
+          title="Daemon fleet — one supervisor, N background Pis"
+        >
+          <p className="text-sm">
+            See <a href="#daemon-mode" className="text-accent underline">Daemon mode</a> for the full flow.
+          </p>
+          <DocsTable
+            headers={["Command", "Description"]}
+            rows={[
+              [
+                <InlineCode key="c">/remote-pi create &lt;cwd&gt; [--name X]</InlineCode>,
+                "Register a folder as a daemon",
+              ],
+              [
+                <InlineCode key="c">/remote-pi remove &lt;id&gt;</InlineCode>,
+                "Unregister a daemon (local config preserved)",
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemons</InlineCode>,
+                "List registered daemons + state",
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemon start</InlineCode>,
+                "Start every registered daemon",
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemon stop</InlineCode>,
+                <>
+                  Stop every running daemon (<InlineCode>/remote-pi stop</InlineCode>{" "}
+                  stops only the local terminal)
+                </>,
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemon restart</InlineCode>,
+                "Stop + start all daemons",
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemon status</InlineCode>,
+                "Detailed runtime status (pid, uptime, restart count)",
+              ],
+              [
+                <InlineCode key="c">/remote-pi daemon send &lt;id&gt; &quot;&lt;text&gt;&quot;</InlineCode>,
+                "Send a prompt to a specific daemon",
+              ],
+              [
+                <InlineCode key="c">/remote-pi install</InlineCode>,
+                <>
+                  Install <InlineCode>pi-supervisord</InlineCode> as a system service
+                </>,
+              ],
+              [
+                <InlineCode key="c">/remote-pi uninstall</InlineCode>,
+                "Remove the system service (registry preserved)",
+              ],
+            ]}
+          />
+        </DocsSubsection>
         <p>The footer in the Pi TUI reflects state live:</p>
         <ul className="ml-6 list-disc space-y-2">
           <li>
@@ -516,6 +793,11 @@ agent_request({
               <InlineCode key="p">~/.pi/remote/peers.json</InlineCode>,
               "Per-machine",
               "Paired mobile devices",
+            ],
+            [
+              <InlineCode key="p">~/.pi/remote/daemons.json</InlineCode>,
+              "Per-machine",
+              <>Daemon registry (list of <InlineCode>{`{ cwd }`}</InlineCode> entries)</>,
             ],
             [
               <InlineCode key="p">~/.pi/remote/sessions/&lt;name&gt;/</InlineCode>,
@@ -635,7 +917,18 @@ function DocsToc() {
           <TocItem href="#point-pi" label="Point Pi at your relay" sub />
         </TocItem>
         <TocItem href="#agent-network" label="Agent network deep dive" />
-        <TocItem href="#commands" label="Command reference" />
+        <TocItem href="#daemon-mode" label="Daemon mode">
+          <TocItem href="#daemon-prereq" label="One-time setup" sub />
+          <TocItem href="#daemon-per-folder" label="Per-folder workflow" sub />
+          <TocItem href="#daemon-fleet" label="Fleet operations" sub />
+          <TocItem href="#daemon-remove" label="Remove / uninstall" sub />
+          <TocItem href="#daemon-logs" label="Logs" sub />
+          <TocItem href="#daemon-caveats" label="Caveats" sub />
+        </TocItem>
+        <TocItem href="#commands" label="Command reference">
+          <TocItem href="#commands-local" label="Local session" sub />
+          <TocItem href="#commands-daemon" label="Daemon fleet" sub />
+        </TocItem>
         <TocItem href="#config" label="Configuration files" />
         <TocItem href="#troubleshooting" label="Troubleshooting">
           <TocItem href="#footer-stuck" label="Stuck on pairing" sub />

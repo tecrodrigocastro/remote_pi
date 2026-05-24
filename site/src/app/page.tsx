@@ -109,6 +109,73 @@ export default function Home() {
       </section>
 
       <section
+        id="daemon-mode"
+        aria-labelledby="daemon-mode-heading"
+        className="border-b border-border-soft bg-surface/40"
+      >
+        <div className="mx-auto max-w-6xl px-6 py-20">
+          <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-16">
+            <div className="flex flex-col gap-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">
+                New · Daemon mode
+              </p>
+              <h2
+                id="daemon-mode-heading"
+                className="text-balance text-3xl font-semibold tracking-tight text-fg sm:text-4xl"
+              >
+                Keep your Pi alive 24/7.
+              </h2>
+              <p className="text-base leading-relaxed text-muted">
+                Pair, configure, install, walk away. A single supervisor turns
+                every paired folder into a background agent that survives
+                logout, restarts on crash, and answers your phone at 3am.
+                systemd on Linux, launchd on macOS, one CLI to manage the
+                fleet.
+              </p>
+              <p className="rounded-xl border border-border-soft bg-bg/60 px-4 py-3 text-sm leading-relaxed text-muted">
+                <strong className="text-fg">Heads up:</strong> daemons inherit
+                your Pi tool permissions — Bash, Edit, Write run without
+                prompts. Lock those down before promoting a folder. A
+                tool-approval gate ships in a follow-up plan.
+              </p>
+              <a
+                href="/docs#daemon-mode"
+                className="inline-flex h-10 w-fit items-center justify-center rounded-full border border-border-soft px-5 text-sm font-medium text-fg transition-colors hover:border-fg/40"
+              >
+                Read the daemon docs →
+              </a>
+            </div>
+            <ol className="grid gap-3 sm:grid-cols-2">
+              <DaemonStep
+                n={1}
+                title="Pair the folder"
+                command="/remote-pi pair"
+                description="Configure the agent interactively first — keys, paired devices, relay URL all live in the cwd."
+              />
+              <DaemonStep
+                n={2}
+                title="Promote to daemon"
+                command='remote-pi create ~/Movies --name "Video Editor"'
+                description="Register the folder. The id is a stable hash of the path so it survives moves."
+              />
+              <DaemonStep
+                n={3}
+                title="Install the supervisor"
+                command="remote-pi install"
+                description="One user-level service per machine: launchd plist or systemd --user unit, idempotent."
+              />
+              <DaemonStep
+                n={4}
+                title="Walk away"
+                command="remote-pi daemon start"
+                description="The fleet is alive. Send prompts, restart, or stop everything from a single CLI."
+              />
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section
         id="quick-start"
         aria-labelledby="quick-start-heading"
         className="border-b border-border-soft"
@@ -165,6 +232,33 @@ export default function Home() {
         </div>
       </section>
     </>
+  );
+}
+
+function DaemonStep({
+  n,
+  title,
+  command,
+  description,
+}: {
+  n: number;
+  title: string;
+  command: string;
+  description: string;
+}) {
+  return (
+    <li className="flex flex-col gap-3 rounded-2xl border border-border-soft bg-surface p-5">
+      <div className="flex items-center gap-3">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/20 text-xs font-bold text-accent">
+          {n}
+        </span>
+        <span className="font-semibold text-fg">{title}</span>
+      </div>
+      <code className="block overflow-x-auto rounded-md bg-bg/70 px-3 py-2 font-mono text-xs leading-relaxed text-fg">
+        {command}
+      </code>
+      <p className="text-xs leading-relaxed text-muted">{description}</p>
+    </li>
   );
 }
 
