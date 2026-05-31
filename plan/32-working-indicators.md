@@ -134,6 +134,33 @@ half-open silencioso fica descoberto.
 
 ---
 
+## Próxima rodada — app polish (preparado, não despachado)
+
+### AppBar subtitle (nome do dispositivo) pisca vazio→preenchido
+
+**Sintoma** (visto em câmera lenta): a linha 2 da AppBar do chat (dispositivo
+pareado) aparece vazia/fallback e depois preenche.
+
+**Raiz**: `_peerDisplayName(peer, initialTitle)` (chat_page.dart:279) usa
+`peer.nickname` do **`PeerRecord` carregado async** no mount → até carregar,
+mostra fallback. O Home **já tem** esse nome (lista os peers). Hoje o `/chat`
+só recebe `{'title': title}` (home_page.dart:479 → `initialTitle`,
+app_router.dart:311-316).
+
+**Fix** (app-only, sem rede):
+1. Home passa o device no `extra`: `extra: {'title': title, 'device': deviceName}`.
+2. Router lê `extra['device']` → novo param `initialDevice` no `ChatPage`.
+3. `ChatPage` usa `initialDevice` direto na linha 2 da AppBar; remove a
+   dependência do `PeerRecord` async pro **subtítulo** (render imediato).
+4. `PeerRecord` ainda é usado pelo **dialog de detalhes** (chat_page.dart:204+:
+   nickname/relay/safety) — manter, mas carregar **on-demand** no tap do info,
+   não no mount (se isso elimina o load no mount).
+
+**Ganho**: sem flicker, sem load async no mount pro subtítulo, sem micro-gestão
+de estado da AppBar.
+
+---
+
 ## Próximos planos
 
 - Se o tráfego de room_meta em rajada (risco 1) doer, mover a histerese pra fonte
