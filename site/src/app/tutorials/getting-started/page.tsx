@@ -62,9 +62,10 @@ export default function GettingStartedTutorial() {
             </li>
           </ul>
           <p className="text-sm">
-            A one-command <InlineCode>curl</InlineCode> installer that sets up
-            Pi for you is on the way; until it lands, use the{" "}
-            <strong className="text-fg">Already have Pi</strong> path below.
+            No Pi yet? The <strong className="text-fg">No Pi yet</strong> tab
+            below runs a one-command <InlineCode>curl</InlineCode> installer that
+            sets up Pi, the plugin, and the supervisor for you. Already have Pi?
+            Use the <strong className="text-fg">Already have Pi</strong> path.
           </p>
         </DocsSection>
 

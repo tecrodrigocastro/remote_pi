@@ -12,19 +12,19 @@ const HAVE_PI_COMMANDS = `pi install npm:remote-pi
 
 type InstallTabsProps = {
   /**
-   * Flips the "No Pi yet" curl tab from a disabled "Coming soon" teaser to a
-   * live, selectable tab. Stays false until the Wave 0 installer ships and the
-   * Wave E route serves install.sh under the canonical domain.
+   * Controls the "No Pi yet" curl tab. Defaults to `true` now that the Wave 0
+   * installer ships and the site serves install.sh at the canonical domain
+   * (Wave E). Pass `false` to fall back to the disabled "Coming soon" teaser.
    */
   curlReady?: boolean;
 };
 
 /**
  * Two-tab install block shared by the home (Wave A) and the Getting Started
- * tutorial (Wave C). "Already have Pi" is always available; "No Pi yet" waits
- * on the curl installer.
+ * tutorial (Wave C). Both tabs are live: "No Pi yet" runs the curl installer,
+ * "Already have Pi" adds the plugin to an existing Pi.
  */
-export function InstallTabs({ curlReady = false }: InstallTabsProps) {
+export function InstallTabs({ curlReady = true }: InstallTabsProps) {
   return (
     <Tabs
       ariaLabel="Install Remote Pi"

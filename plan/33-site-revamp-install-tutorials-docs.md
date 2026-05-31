@@ -323,13 +323,14 @@ callout, prev/next) criados na Wave A.
   aba "Already have Pi" segue inalterada.
 
 **DoD Wave E**:
-- [ ] Smoke-test em ambiente limpo passou (pré-condição pra acender a aba)
-- [ ] **remote-pi republicado** contra `@earendil@0.78` (senão `pi install npm:remote-pi` puxa o SDK deprecated transitivo — plugin 0.4.0 ainda pina `@mariozechner`)
-- [ ] macOS limpo (launchd) verificado manualmente (container cobre só Linux)
-- [ ] `install.sh` acessível sob o domínio canônico, servido como fonte única
-- [ ] Aba "No Pi yet" mostra o curl real
-- [ ] Aba "Already have Pi" segue funcionando (sem regressão)
-- [ ] `pnpm lint && pnpm build` OK
+- [x] Smoke-test Linux limpo passou (v5 verde, idempotente) — macOS pendente ↓
+- [x] `install.sh` servido em `/install.sh` via `public/install.sh` (cópia commitada byte-idêntica) + `scripts/sync-install-sh.mjs` no build (DRY no monorepo, no-op no Docker)
+- [x] Aba "No Pi yet" mostra o curl real (`curlReady` default `true`)
+- [x] Aba "Already have Pi" segue funcionando (sem regressão)
+- [x] `pnpm lint && pnpm build` OK (15 rotas)
+- [ ] **Re-publicar a imagem Docker** (`./push-docker.sh`) — a imagem atual foi buildada SEM `public/install.sh` → `/install.sh` 404 até republicar — **manual**
+- [ ] macOS limpo (launchd) verificado manualmente (container cobriu só Linux) — **manual**
+- [ ] **remote-pi republicado** contra `@earendil@0.78` (senão `pi install npm:remote-pi` puxa o SDK deprecated transitivo) — **manual/release**
 
 ---
 
@@ -342,7 +343,7 @@ callout, prev/next) criados na Wave A.
 - [x] Wave C — seção Tutoriais com os 4 tutoriais (Getting Started, Mesh local, Mesh remota, Daemon) — Site
 - [x] Wave D — Doc reduzida a Referência (~900 linhas) + ponteiros; hero linka `/why` — Site
 - [x] Wave C-extra — tutorial EXTRA `remote-pi claude` (Claude na mesh) — Site
-- [ ] Wave E — hero promove o curl real (gated na Wave 0)
+- [x] Wave E (código) — aba "No Pi yet" acesa, `install.sh` servido via `public/` + sync. ⚠️ requer **re-publish da imagem Docker** + smoke macOS + republish npm (manual)
 - [ ] Memory atualizada: `project_pre_publish_cycle` (27-D revisado) e nota da
       virada de posicionamento mesh→remote-control
 
