@@ -270,14 +270,21 @@ badge pisca `◐→●`; toggle off → manual; vite não mostra o toggle.
 
 ## Definition of Done
 
-- [ ] Passo 1 — domain + contratos genéricos (sem stack specifics)
-- [ ] Passo 2 — runner reusa PTY/Process, start/stop/restart/sendKey
-- [ ] Passo 3 — discovery + NpmAdapter + FlutterAdapter
-- [ ] Passo 4 — subpane de Tasks na coluna direita, multi-task paralelo
+- [x] Passo 1 — domain + contratos genéricos (sem stack specifics)
+- [x] Passo 2 — runner reusa PTY (`kyroon_pty`), start/stop/restart/sendKey/resize
+- [x] Passo 3 — discovery + NpmAdapter + FlutterAdapter (+ teste do npm)
+- [x] Passo 4 — subpane de Tasks na coluna direita, controles data-driven
 - [ ] Passo 5 — profiles + args ad-hoc + `.cockpit/tasks.json`
-- [ ] Passo 6 — watch toggle + progress patterns (badge building→ready)
-- [ ] `flutter analyze` zero issues; testes dos adapters passam
-- [ ] Sem `if (flutter)` no core/ui — tudo via dados do adapter
+- [ ] Passo 6 — watch toggle (Directory.watch) + progress patterns ao vivo
+- [ ] Output ao vivo de cada task num CockpitTerminal embutido
+- [x] `flutter analyze` zero issues; `flutter test` (145) e `build macos` ok
+- [x] Sem `if (flutter)` no core/ui — tudo via dados do adapter
+
+> **Entregue (commits desta branch)**: domain + runner PTY + discovery/adapters
+> + subpane com badges e botões de tecla (`r`/`R`/...), montado abaixo da árvore
+> de arquivos via novo slot `tasksPanel` do `FileTreePanel`. O runner já expõe
+> `output(taskId)` e `progressPatterns` estão modelados — falta plugar o
+> terminal embutido (passo de UI) e ligar os profiles + watcher (passos 5-6).
 
 ## Decisões em aberto (resolver antes do Passo 1)
 

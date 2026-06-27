@@ -518,6 +518,9 @@ class _CockpitPageState extends State<CockpitPage> {
                                         .read<SettingsController>()
                                         .setSearchPanelHeight(_searchHeight),
                                   ),
+                            tasksPanel: vm.selectedProject == null
+                                ? null
+                                : TasksPanel(cwd: vm.selectedProject!.path),
                             footer: const _LspStatusBar(),
                           ),
                           // Alça de arraste sobre a borda esquerda do painel
