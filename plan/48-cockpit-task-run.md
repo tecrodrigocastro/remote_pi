@@ -135,6 +135,19 @@ O `TaskDiscovery` agrega vários `TaskAdapter` (mesmo padrão multi-marcador do
 - Schema do JSON = espelho das entities (genérico). Flavor/dart-define do Flutter
   **não** são chaves do schema — viram `args` (`["--flavor","dev","--dart-define=…"]`)
   gerados pelo formulário amigável do FlutterAdapter na UI.
+- **`cwd` por task, relativo à pasta do `tasks.json`** (decisão 2026-06-27):
+  - **per-task é canônico** (explícito, sem herança escondida): cada task declara
+    o seu `cwd`. Cobre **monorepo** onde as pastas divergem: UM `tasks.json` na
+    raiz dirige `app/` (flutter, `cwd:"app"`), `backend/` (dart, `cwd:"backend"`),
+    etc. — sem espalhar arquivo por subpacote.
+  - `cwd` **omitido** numa task → roda na pasta do arquivo (workspace). Cobre repo
+    de pacote único.
+  - top-level `"cwd"` é só **açúcar de DRY opcional** (default quando todas
+    compartilham a pasta); a task sempre vence. Pode nem existir.
+  - O loader resolve absoluto = `join(dir_do_tasks_json, cwd_relativo)` e grava em
+    `TaskDefinition.cwd` (o campo já existe — zero mudança de domínio).
+  - Convive com a detecção: pacote único → adapters detectam sozinhos; monorepo
+    (raiz sem manifesto) → JSON com `cwd` por task.
 
 ## UI / Layout
 
@@ -257,8 +270,10 @@ refletem estado; subpane colapsa e Files volta a ocupar tudo.
 
 ### Passo 5 — Profiles + args ad-hoc + JSON opcional
 Dropdown de profile com preview do comando; campo "+ args"; ler/gravar
-`.cockpit/tasks.json`. Formulário amigável de flavor/dart-define no FlutterAdapter
-→ gera `args` genéricos.
+`.cockpit/tasks.json` (com `cwd` opcional relativo ao arquivo → resolve absoluto
+em `TaskDefinition.cwd`; default top-level + override por task; suporta monorepo
+com UM arquivo na raiz). Formulário amigável de flavor/dart-define no
+FlutterAdapter → gera `args` genéricos.
 **Aceite**: rodar `app/dev` e `app/prod` em paralelo; editar tasks.json e ver
 refletir; preview mostra a linha real.
 
@@ -274,7 +289,11 @@ badge pisca `◐→●`; toggle off → manual; vite não mostra o toggle.
 - [x] Passo 2 — runner reusa PTY (`kyroon_pty`), start/stop/restart/sendKey/resize
 - [x] Passo 3 — discovery + NpmAdapter + FlutterAdapter (+ teste do npm)
 - [x] Passo 4 — subpane de Tasks na coluna direita, controles data-driven
-- [ ] Passo 5 — profiles + args ad-hoc + `.cockpit/tasks.json`
+- [~] Passo 5 — `.cockpit/tasks.json` loader + `cwd` per-task FEITO (mesclado no
+      discover, JSON tem precedência); falta o UI de profiles/args ad-hoc
+- [ ] Doc do `.cockpit/tasks.json`: documentar o schema (campos, `cwd` per-task,
+      interactiveKeys, watch, progressPatterns, profiles) + publicar/− referenciar
+      um JSON Schema de verdade (substituindo a URL aspiracional removida)
 - [ ] Passo 6 — watch toggle (Directory.watch) + progress patterns ao vivo
 - [ ] Output ao vivo de cada task num CockpitTerminal embutido
 - [x] `flutter analyze` zero issues; `flutter test` (145) e `build macos` ok
