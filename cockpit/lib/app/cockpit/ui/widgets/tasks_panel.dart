@@ -92,7 +92,13 @@ class _TasksPanelState extends State<TasksPanel> {
                       onTap: () => context
                           .read<CockpitViewModel>()
                           .openTaskOutput(def.id, def.label),
-                      onStart: () => vm.start(def),
+                      // Play também já abre a aba dos logs.
+                      onStart: () {
+                        vm.start(def);
+                        context
+                            .read<CockpitViewModel>()
+                            .openTaskOutput(def.id, def.label);
+                      },
                       onStop: () => vm.stop(def.id),
                       onRestart: () => vm.restart(def.id),
                       onToggleWatch: () => vm.toggleWatch(def),

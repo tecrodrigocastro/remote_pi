@@ -40,9 +40,10 @@ class TaskTerminalStore {
     _lastPid[run.taskId] = run.pid;
 
     final term = terminalFor(run.taskId);
-    // Preserva o histórico (não limpa); marca a fronteira de um novo run.
+    // Restart (já houve run): limpa tela + scrollback e volta o cursor ao topo
+    // — o novo run começa do zero (mesma sequência do comando `clear`).
     if (_outSubs.containsKey(run.taskId)) {
-      term.write('\r\n\x1b[2m── restarted ──\x1b[0m\r\n');
+      term.write('\x1b[H\x1b[2J\x1b[3J');
     }
     _outSubs.remove(run.taskId)?.cancel();
     _outSubs[run.taskId] = _runner
