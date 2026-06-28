@@ -57,7 +57,6 @@ class _TasksPanelState extends State<TasksPanel> {
 
     return Container(
       decoration: BoxDecoration(
-        color: colors.panel,
         border: Border(top: BorderSide(color: colors.border)),
       ),
       child: Column(
