@@ -28,12 +28,15 @@ class ClaudeStatusUpdate {
 /// conecta neste socket e manda o status; o roteamento pra aba certa vem do
 /// `paneId` (env injetado no spawn da PTY).
 abstract class TerminalStatusServer {
-  /// Caminho do socket (injetado no env do PTY como `COCKPIT_STATUS_SOCK`).
-  String get socketPath;
+  /// Variáveis de ambiente que o helper `cockpit-hook` precisa pra reportar
+  /// status, injetadas no PTY de cada aba. Disponível **após** [start].
+  /// POSIX: `{COCKPIT_STATUS_SOCK}`. Windows: `{COCKPIT_STATUS_PORT,
+  /// COCKPIT_STATUS_TOKEN}` (TCP loopback + token anti-spoof).
+  Map<String, String> get hookEnv;
 
   /// Sobe o servidor; [onUpdate] é chamado a cada status recebido.
   Future<void> start(void Function(ClaudeStatusUpdate update) onUpdate);
 
-  /// Derruba o servidor e remove o socket.
+  /// Derruba o servidor (e remove o socket no POSIX).
   Future<void> stop();
 }

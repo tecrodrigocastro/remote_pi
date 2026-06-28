@@ -609,7 +609,8 @@ class CockpitViewModel extends ChangeNotifier {
   // ---- init -----------------------------------------------------------------
   Future<void> init() async {
     // Servidor de status do `cockpit-hook` (claude nas abas reporta turno aqui).
-    unawaited(_statusServer.start(_onClaudeStatus));
+    // Await: no Windows o `hookEnv` depende da porta ligada antes de spawnar abas.
+    await _statusServer.start(_onClaudeStatus);
     _projectList.addAll(await _projects.all());
     // Carrega os layouts salvos (mas não reconstrói nada ainda — lazy).
     for (final project in _projectList) {
@@ -1321,11 +1322,11 @@ class CockpitViewModel extends ChangeNotifier {
       workingDirectory: cwd,
       gateway: _terminalFactory.create(),
       title: title,
-      // Injeta no env da PTY: roteamento (paneId) + caminho do socket. O
-      // `cockpit-hook` do claude herda e reporta status de turno de volta.
+      // Injeta no env da PTY: roteamento (paneId) + transporte (socket/porta).
+      // O `cockpit-hook` do claude herda e reporta status de turno de volta.
       spawnEnv: <String, String>{
         'COCKPIT_PANE_ID': id,
-        'COCKPIT_STATUS_SOCK': _statusServer.socketPath,
+        ..._statusServer.hookEnv,
       },
     );
     // claude rodando na aba reporta fim de turno via socket → mesma notificação

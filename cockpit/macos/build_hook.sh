@@ -5,34 +5,38 @@
 #   ./macos/build_hook.sh dev
 #     Compila para ~/.cockpit/bin/cockpit-hook (para `flutter run` / testes E2E).
 #
-#   ./macos/build_hook.sh                (sem args, ou rodado pelo Xcode)
-#     Modo bundle: compila e copia para
+#   (sem args / rodado pelo Xcode como Run Script phase)
+#     Compila e copia para
 #       ${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/cockpit-hook
 #     e code-signa com ${EXPANDED_CODE_SIGN_IDENTITY} (a mesma da app).
 #
-# Para produção, adicione este script como **Run Script** build phase no target
-# Runner (Xcode), DEPOIS de "Bundle Dart" / antes de "Code Sign". Variáveis
-# BUILT_PRODUCTS_DIR/PRODUCT_NAME/EXPANDED_CODE_SIGN_IDENTITY vêm do Xcode.
+# Adicionado como Run Script phase no target Runner (Xcode), depois do
+# "Run Script" do Flutter e antes do "Code Sign". Vars BUILT_PRODUCTS_DIR/
+# PRODUCT_NAME/EXPANDED_CODE_SIGN_IDENTITY/FLUTTER_ROOT vêm do Xcode.
 set -euo pipefail
 
-# Raiz do projeto cockpit (este script vive em cockpit/macos/).
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # cockpit/
 SRC="$ROOT/tool/cockpit_hook.dart"
+
+# Resolve o `dart`: 1) Flutter (FLUTTER_ROOT setado pelo Xcode), 2) PATH.
+resolve_dart() {
+  if [ -n "${FLUTTER_ROOT:-}" ] && [ -x "$FLUTTER_ROOT/bin/dart" ]; then
+    echo "$FLUTTER_ROOT/bin/dart"; return
+  fi
+  if command -v dart >/dev/null 2>&1; then command -v dart; return; fi
+  if command -v flutter >/dev/null 2>&1; then
+    echo "$(dirname "$(command -v flutter)")/dart"; return
+  fi
+  echo "[build_hook] erro: 'dart' não encontrado (defina FLUTTER_ROOT)" >&2
+  exit 1
+}
 
 compile() {
   local out="$1"
   mkdir -p "$(dirname "$out")"
   echo "[build_hook] compilando $SRC -> $out"
-  dart compile exe "$SRC" -o "$out"
+  "$(resolve_dart)" compile exe "$SRC" -o "$out"
   chmod +x "$out"
-}
-
-sign() {
-  local target="$1"
-  local identity="${EXPANDED_CODE_SIGN_IDENTITY:--}" # '-' = ad-hoc se não houver
-  echo "[build_hook] codesign ($identity) $target"
-  codesign --force --options runtime --timestamp=none -s "$identity" "$target" || \
-    codesign --force -s - "$target"
 }
 
 mode="${1:-bundle}"
@@ -47,5 +51,19 @@ fi
 : "${PRODUCT_NAME:?PRODUCT_NAME ausente}"
 DEST="$BUILT_PRODUCTS_DIR/$PRODUCT_NAME.app/Contents/Resources/cockpit-hook"
 compile "$DEST"
-sign "$DEST"
+
+# Assinatura: exe AOT do Dart é morto sob hardened runtime ad-hoc. Então:
+# - dev/ad-hoc (sem identity ou '-'): assina PLANO (sem --options runtime).
+# - produção (Developer ID): hardened runtime + entitlements (allow-jit /
+#   allow-unsigned-executable-memory) que o runtime do Dart exige.
+IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ] || [ "$IDENTITY" = "-" ]; then
+  echo "[build_hook] codesign ad-hoc (dev) $DEST"
+  codesign --force -s - "$DEST"
+else
+  echo "[build_hook] codesign ($IDENTITY) + hardened runtime $DEST"
+  codesign --force --options runtime \
+    --entitlements "$ROOT/macos/cockpit_hook.entitlements" \
+    -s "$IDENTITY" "$DEST"
+fi
 echo "[build_hook] bundle OK -> $DEST"

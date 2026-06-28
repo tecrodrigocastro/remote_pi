@@ -17,11 +17,16 @@ import 'dart:io';
 
 Future<void> main() async {
   try {
-    final paneId = Platform.environment['COCKPIT_PANE_ID'];
-    final sock = Platform.environment['COCKPIT_STATUS_SOCK'];
-    if (paneId == null || paneId.isEmpty || sock == null || sock.isEmpty) {
+    final env = Platform.environment;
+    final paneId = env['COCKPIT_PANE_ID'];
+    if (paneId == null || paneId.isEmpty) {
       return; // não é uma sessão hospedada pelo Cockpit
     }
+    // Transporte: socket Unix no POSIX; TCP loopback (+token) no Windows, que
+    // não tem UDS no Dart. O servidor injeta a env certa por plataforma.
+    final sock = env['COCKPIT_STATUS_SOCK'];
+    final port = int.tryParse(env['COCKPIT_STATUS_PORT'] ?? '');
+    if ((sock == null || sock.isEmpty) && port == null) return;
 
     final raw = await stdin.transform(utf8.decoder).join();
     if (raw.trim().isEmpty) return;
@@ -37,12 +42,18 @@ Future<void> main() async {
       'st': status,
       'sid': (decoded['session_id'] ?? '').toString(),
       'tx': (decoded['transcript_path'] ?? '').toString(),
+      // Token só importa no TCP (loopback é acessível por qualquer processo
+      // local); no UDS a permissão do socket já protege.
+      if (env['COCKPIT_STATUS_TOKEN'] != null)
+        'tok': env['COCKPIT_STATUS_TOKEN'],
     });
 
-    final socket = await Socket.connect(
-      InternetAddress(sock, type: InternetAddressType.unix),
-      0,
-    );
+    final socket = sock != null && sock.isNotEmpty
+        ? await Socket.connect(
+            InternetAddress(sock, type: InternetAddressType.unix),
+            0,
+          )
+        : await Socket.connect(InternetAddress.loopbackIPv4, port!);
     socket.add(utf8.encode('$payload\n'));
     await socket.flush();
     await socket.close();

@@ -87,6 +87,27 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# === cockpit-hook helper (status de turno do claude nas abas) ===
+# Compila o helper que o claude invoca nos hooks e o instala ao lado do binário
+# (o Inno empacota o bundle inteiro). Em runtime o ClaudeHookInstaller o extrai
+# pra ~/.cockpit/bin. Equivale ao Run Script phase do macOS (build_hook.sh).
+set(COCKPIT_HOOK_SRC "${CMAKE_SOURCE_DIR}/../tool/cockpit_hook.dart")
+set(COCKPIT_HOOK_EXE "${CMAKE_BINARY_DIR}/cockpit-hook.exe")
+if(DEFINED ENV{FLUTTER_ROOT})
+  set(DART_EXE "$ENV{FLUTTER_ROOT}/bin/dart.bat")
+else()
+  set(DART_EXE "dart")
+endif()
+add_custom_command(
+  OUTPUT "${COCKPIT_HOOK_EXE}"
+  COMMAND "${DART_EXE}" compile exe "${COCKPIT_HOOK_SRC}" -o "${COCKPIT_HOOK_EXE}"
+  DEPENDS "${COCKPIT_HOOK_SRC}"
+  COMMENT "Compilando cockpit-hook.exe"
+  VERBATIM)
+add_custom_target(cockpit_hook ALL DEPENDS "${COCKPIT_HOOK_EXE}")
+install(PROGRAMS "${COCKPIT_HOOK_EXE}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

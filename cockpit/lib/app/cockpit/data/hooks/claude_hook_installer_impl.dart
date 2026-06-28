@@ -8,10 +8,10 @@ import 'package:flutter/foundation.dart';
 
 /// Implementação do [ClaudeHookInstaller].
 ///
-/// 1. Copia o helper `cockpit-hook` do bundle (`Contents/Resources/`) para um
-///    caminho estável fora do bundle (`~/.cockpit/bin/cockpit-hook`) — sobrevive
-///    a update/move da app; o `settings.json` aponta para a cópia, não para o
-///    bundle. Em dev (sem bundle) reusa uma cópia já presente, se houver.
+/// 1. Copia o helper `cockpit-hook` empacotado no app (compilado pelo
+///    `macos/build_hook.sh` / passo de build do Windows) para um caminho estável
+///    (`~/.cockpit/bin/cockpit-hook[.exe]`) — o `settings.json` aponta pra cópia,
+///    não pro bundle (sobrevive a update/move). Recopia só quando o tamanho muda.
 /// 2. Faz **append idempotente** de um entry marcado (`_cockpit`) em cada evento
 ///    de hook, sem nunca reescrever a lista (preserva hooks do usuário/iTerm2/
 ///    plugins). Re-rodar remove o entry antigo nosso e re-adiciona — não duplica.
@@ -37,10 +37,6 @@ class ClaudeHookInstallerImpl implements ClaudeHookInstaller {
 
   @override
   Future<Result<void, String>> ensureInstalled() async {
-    // Por enquanto só macOS/Linux (helper escreve em /dev/tty, POSIX).
-    if (Platform.isWindows) {
-      return const Success<void, String>(null);
-    }
     final home = remotePiHome();
     if (home == null) {
       return const Failure<void, String>('HOME não resolvido');
@@ -57,13 +53,15 @@ class ClaudeHookInstallerImpl implements ClaudeHookInstaller {
     }
   }
 
-  /// Copia o helper do bundle para `~/.cockpit/bin/cockpit-hook` (recopia se
-  /// tamanho difere). Devolve o caminho estável, ou `null` se não há fonte.
+  /// Copia o helper empacotado para `~/.cockpit/bin/cockpit-hook[.exe]`.
+  /// Recopia só se o tamanho difere. Devolve o caminho, ou `null` se o binário
+  /// não está no bundle (ex.: dev sem o passo de build) e não há cópia prévia.
   Future<String?> _ensureHelper(String home) async {
+    final name = Platform.isWindows ? 'cockpit-hook.exe' : 'cockpit-hook';
     final destDir = Directory('$home/.cockpit/bin');
-    final dest = File('${destDir.path}/cockpit-hook');
+    final dest = File('${destDir.path}/$name');
 
-    final bundled = _bundledHelper();
+    final bundled = _bundledHelper(name);
     if (bundled != null && await bundled.exists()) {
       final srcLen = await bundled.length();
       final upToDate = await dest.exists() && await dest.length() == srcLen;
@@ -80,13 +78,17 @@ class ClaudeHookInstallerImpl implements ClaudeHookInstaller {
     return null;
   }
 
-  /// Caminho do helper dentro do `.app` (macOS): a partir do executável Flutter
-  /// `…/Contents/MacOS/<app>` sobe para `…/Contents/Resources/cockpit-hook`.
-  File? _bundledHelper() {
+  /// Caminho do helper empacotado no app, por plataforma:
+  /// - macOS: `…/Contents/MacOS/<app>` → `…/Contents/Resources/cockpit-hook`
+  /// - Windows/Linux: ao lado do executável (`<dir>/cockpit-hook[.exe]`)
+  File? _bundledHelper(String name) {
     try {
       final exe = File(Platform.resolvedExecutable);
-      final contents = exe.parent.parent; // Contents/MacOS → Contents
-      return File('${contents.path}/Resources/cockpit-hook');
+      if (Platform.isMacOS) {
+        final contents = exe.parent.parent; // Contents/MacOS → Contents
+        return File('${contents.path}/Resources/$name');
+      }
+      return File('${exe.parent.path}/$name');
     } catch (_) {
       return null;
     }
