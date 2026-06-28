@@ -291,7 +291,7 @@ badge pisca `◐→●`; toggle off → manual; vite não mostra o toggle.
 - [x] Passo 4 — subpane de Tasks na coluna direita, controles data-driven
 - [x] Passo 5 — `.cockpit/tasks.json` loader + `cwd` per-task (mesclado no
       discover, JSON tem precedência) + **UI de profiles** (chip que cicla +
-      preview ao vivo) + **"+ args" ad-hoc** (campo expansível, override de 1 run)
+      preview ao vivo do comando). (args ad-hoc na UI foram removidos a pedido)
 - [x] Doc do `.cockpit/tasks.json`: `docs/tasks-json.md` (todos os campos) +
       `docs/tasks.schema.json` (JSON Schema draft-07, referenciável no editor)
 - [x] Passo 6 — watcher reload-on-save (`Directory.watch` recursivo, debounce,

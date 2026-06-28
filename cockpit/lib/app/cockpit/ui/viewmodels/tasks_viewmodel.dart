@@ -29,8 +29,6 @@ class TasksViewModel extends ChangeNotifier {
   final _watchOn = <String, bool>{};
   // Profile escolhido por task (default = primeiro). Persiste só em memória.
   final _profile = <String, String>{};
-  // Args ad-hoc por task (override de UMA execução). Persiste só em memória.
-  final _adHoc = <String, String>{};
 
   List<TaskDefinition> get tasks => _tasks;
   bool get loading => _loading;
@@ -114,36 +112,17 @@ class TasksViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Args ad-hoc (texto cru) de uma task.
-  String adHocArgs(String taskId) => _adHoc[taskId] ?? '';
-
-  /// Edita os args ad-hoc (override de uma execução, não vira profile).
-  void setAdHocArgs(String taskId, String value) {
-    _adHoc[taskId] = value;
-    notifyListeners();
-  }
-
-  /// Comando final (preview) com profile + args ad-hoc aplicados.
+  /// Comando final (preview) com os args do profile escolhido aplicados.
   String commandPreview(TaskDefinition def) {
     final name = selectedProfile(def);
     final profile = name == null
         ? null
         : def.profiles.firstWhere((p) => p.name == name);
-    final parts = [...def.resolveArgs(profile), ..._splitArgs(def.id)];
-    return '${def.command} ${parts.join(' ')}'.trim();
+    return '${def.command} ${def.resolveArgs(profile).join(' ')}'.trim();
   }
 
-  Future<void> start(TaskDefinition def) => _runner.start(
-    def,
-    profileName: selectedProfile(def),
-    adHocArgs: _splitArgs(def.id),
-  );
-
-  /// Quebra o texto ad-hoc em args por espaço (simples; sem aspas). Vazio = [].
-  List<String> _splitArgs(String taskId) {
-    final raw = (_adHoc[taskId] ?? '').trim();
-    return raw.isEmpty ? const [] : raw.split(RegExp(r'\s+'));
-  }
+  Future<void> start(TaskDefinition def) =>
+      _runner.start(def, profileName: selectedProfile(def));
 
   Future<void> stop(String taskId) => _runner.stop(taskId);
 

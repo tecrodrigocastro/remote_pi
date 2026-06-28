@@ -150,6 +150,6 @@ autocomplete/validação no editor, referencie-o no topo do arquivo:
 
 ## Limitações conhecidas
 
-- **Args ad-hoc** e o texto do `tasks.json` são divididos por espaço, **sem
-  parsing de aspas** — pra valores com espaço, prefira múltiplos itens em `args`.
+- Pra valores de arg com espaço, use **itens separados** em `args`
+  (ex.: `["--dart-define", "MSG=oi mundo"]`).
 - A tab de output não sobrevive ao reinício do app (a task morre junto).
