@@ -9,7 +9,13 @@ import 'package:highlight/highlight.dart' as hl;
 /// gramáticas; e qualquer extensão desconhecida cai em texto puro (plaintext).
 const Map<String, String> _extToLanguage = {
   'ts': 'typescript',
-  'tsx': 'typescript',
+  // `.tsx`/`.jsx` vão pro grammar **javascript** de propósito: o grammar
+  // `typescript` do highlight.js **não** entende JSX — ao topar `<Tag/>` ele
+  // aborta (regra `illegal`) e devolve um único nó plaintext (nodes=1,
+  // relevance=0), ou seja, zero realce. O `javascript` traz o sub-idioma xml e
+  // pinta as tags JSX; perde-se só uns keywords TS (interface/enum), troca que
+  // compensa (highlight vs. nada). `.ts` puro (sem JSX) fica no `typescript`.
+  'tsx': 'javascript',
   'mts': 'typescript',
   'cts': 'typescript',
   'js': 'javascript',
@@ -35,6 +41,15 @@ class DiagnosticRange {
   final int start;
   final int end;
   final LspSeverity severity;
+}
+
+/// Um intervalo casado pela busca **no arquivo** (Cmd+F), em offsets lineares
+/// UTF-16 `[start, end)`. Pintado com fundo destacado sobre o syntax highlight.
+class MatchSpan {
+  const MatchSpan(this.start, this.end);
+
+  final int start;
+  final int end;
 }
 
 /// Converte diagnostics do LSP (posições `line`/`character`, base 0, UTF-16) em
