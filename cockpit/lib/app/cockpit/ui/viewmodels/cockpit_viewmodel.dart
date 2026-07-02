@@ -144,6 +144,18 @@ class CockpitViewModel extends ChangeNotifier {
   Timer? _gitWatchDebounce;
   String? _gitWatchPath;
 
+  /// Poll de segurança do git. O `_gitWatch` só cobre o projeto **selecionado**
+  /// e o `Directory.watch(recursive:)` do macOS coalesce/perde eventos (e forks
+  /// de worktree, cujo `index`/`HEAD` moram fora do working tree, nem sempre
+  /// disparam evento). Sem isso a rail fica desatualizada até o usuário trocar
+  /// de workspace e voltar. Relê o git de **todos** os projetos abertos (raízes
+  /// + forks) periodicamente; `_refreshGit` só notifica quando algo mudou, então
+  /// o custo em UI é nulo em repos parados. Poll restrito à **família visível**
+  /// do projeto selecionado (a raiz + seus forks) — o resto da rail atualiza ao
+  /// selecionar / no fim de turno do agente.
+  Timer? _gitPoll;
+  static const Duration _gitPollInterval = Duration(seconds: 3);
+
   /// Worktrees (forks) por workspace raiz, na ordem do `git worktree list`
   /// (decisão 20). Reconciliado contra o git nos ganchos de refresh; a
   /// existência mora no git, não no Hive (decisões 4, 17). Os mesmos `Project`s
@@ -779,6 +791,7 @@ class CockpitViewModel extends ChangeNotifier {
       unawaited(_refreshGit(project.id));
       unawaited(_refreshWorktrees(project.id));
     }
+    _startGitPoll(); // safety net contra eventos de FS perdidos (bug: rail stale)
     // Detecta IDEs instaladas (assíncrono — topbar atualiza ao chegar).
     unawaited(
       _launcher.probe().then((apps) {
@@ -2145,10 +2158,44 @@ class CockpitViewModel extends ChangeNotifier {
     try {
       _gitWatch = Directory(path)
           .watch(recursive: true)
-          .listen((event) => _onGitFsEvent(projectId, event));
+          .listen(
+            (event) => _onGitFsEvent(projectId, event),
+            // A subscription pode morrer sozinha (erro de FSEvents, limite de
+            // FDs, dir recriada). Sem isso o guard `path == _gitWatchPath`
+            // impediria o re-arm e as updates ao vivo parariam de vez — o poll
+            // ainda cobre, mas re-armamos pra manter a latência baixa.
+            onError: (_) => _rearmGitWatch(path),
+            onDone: () => _rearmGitWatch(path),
+            cancelOnError: true,
+          );
     } catch (_) {
-      _gitWatchPath = null; // pasta inacessível → sem watcher (refresh manual)
+      _gitWatchPath = null; // pasta inacessível → sem watcher (só poll/manual)
     }
+  }
+
+  /// Re-arma o watcher se a subscription do projeto [path] morreu enquanto ele
+  /// ainda é o observado. Zera o guard pra `_startGitWatch` não sair cedo.
+  void _rearmGitWatch(String path) {
+    if (_gitWatchPath != path) return; // já trocaram de projeto → ignora
+    _gitWatch = null;
+    _gitWatchPath = null;
+    _startGitWatch(_selectedProjectId);
+  }
+
+  /// (Re)inicia o poll periódico de git de todos os projetos abertos. Ver
+  /// [_gitPoll].
+  void _startGitPoll() {
+    _gitPoll?.cancel();
+    _gitPoll = Timer.periodic(_gitPollInterval, (_) {
+      final selected = _selectedProjectId;
+      if (selected == null) return;
+      // Raiz do selecionado + seus forks = a família visível na rail.
+      final rootId = _rootOf(selected);
+      unawaited(_refreshGit(rootId));
+      for (final fork in _worktrees[rootId] ?? const <Project>[]) {
+        unawaited(_refreshGit(fork.id));
+      }
+    });
   }
 
   /// Evento de filesystem do watcher. Filtra o ruído interno do `.git/` (o
@@ -2253,6 +2300,7 @@ class CockpitViewModel extends ChangeNotifier {
     unawaited(_statusServer.stop());
     _gitWatch?.cancel();
     _gitWatchDebounce?.cancel();
+    _gitPoll?.cancel();
     for (final t in _saveTimers.values) {
       t.cancel();
     }
