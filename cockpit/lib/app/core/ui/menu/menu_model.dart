@@ -44,12 +44,25 @@ class MenuBarMenu extends MenuNode {
 }
 
 /// Item acionável (folha). [onSelected] `null` = desabilitado (cinza, sem clique).
+///
+/// [shortcutHandledExternally]: o acelerador é só **exibido** (hint no menu) — a
+/// tecla já é tratada por outro handler (ex.: ⌘S/⇧⌘F pelo `FileViewer`, zoom pelo
+/// `_zoomBindings` do `AppRoot`, em todas as plataformas). No macOS o menu nativo
+/// ainda dispara o acelerador (e o handler externo vira fallback quando o item
+/// está desabilitado); fora do macOS o [menuShortcuts] **pula** este item pra não
+/// disparar a ação duas vezes.
 class MenuAction extends MenuNode {
-  const MenuAction(this.label, {this.accelerator, this.onSelected});
+  const MenuAction(
+    this.label, {
+    this.accelerator,
+    this.onSelected,
+    this.shortcutHandledExternally = false,
+  });
 
   final String label;
   final MenuAccelerator? accelerator;
   final void Function()? onSelected;
+  final bool shortcutHandledExternally;
 }
 
 /// Divisória entre grupos de itens (linha no menu).
@@ -90,7 +103,11 @@ Map<SingleActivator, void Function()> menuShortcuts(List<MenuNode> nodes) {
       switch (node) {
         case MenuBarMenu():
           walk(node.items);
-        case MenuAction(:final accelerator?, :final onSelected?):
+        case MenuAction(
+          :final accelerator?,
+          :final onSelected?,
+          shortcutHandledExternally: false,
+        ):
           out[accelerator.resolve()] = onSelected;
         case MenuAction():
         case MenuSeparator():

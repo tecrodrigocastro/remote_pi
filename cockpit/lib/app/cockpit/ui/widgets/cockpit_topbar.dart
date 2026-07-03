@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:cockpit/app/cockpit/domain/entities/launchable_app.dart';
 import 'package:cockpit/app/core/ui/menu/app_menu_bar.dart';
+import 'package:cockpit/app/core/ui/menu/editor_menu_bridge.dart';
+import 'package:cockpit/app/core/ui/menu/workspace_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
 import 'package:cockpit/app/core/ui/widgets/window_controls.dart';
@@ -56,7 +58,13 @@ class CockpitTopbar extends StatelessWidget {
         // Windows/Linux: barra de menu desenhada na janela (estilo VS Code), ao
         // lado do título. No macOS o [WindowMenuBar] é no-op (barra é a nativa).
         if (!Platform.isMacOS) ...[
-          WindowMenuBar(menus: buildAppMenus(context.watch<SettingsController>())),
+          WindowMenuBar(
+            menus: buildAppMenus(
+              context.watch<SettingsController>(),
+              context.watch<EditorMenuBridge>(),
+              context.watch<WorkspaceMenuBridge>(),
+            ),
+          ),
           const SizedBox(width: 8),
         ],
         _IconBtn(

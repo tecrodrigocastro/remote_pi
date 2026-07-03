@@ -974,6 +974,10 @@ class _PaneBodyState extends State<_PaneBody> {
   bool _checkingAgent = false;
   bool _showAgentSetup = false;
 
+  /// Id da aba vazia já auto-convertida em terminal (quando `enableAgent` está
+  /// desligado) — evita reentrar no `onFillEmpty` a cada build.
+  String? _autoTerminalFor;
+
   /// "New agent" numa aba vazia: confere o ambiente. Pronto → spawna direto;
   /// incompleto → revela o [AgentSetupChecklist] inline. Terminal nunca passa
   /// por aqui.
@@ -1147,6 +1151,20 @@ class _PaneBodyState extends State<_PaneBody> {
       listenable: agent,
       builder: (context, _) {
         if (agent.status == AgentStatus.empty) {
+          final enableAgent =
+              context.watch<SettingsController>().settings.enableAgent;
+          // Suporte a agentes desligado → a aba vazia vira **terminal direto**,
+          // sem oferecer a escolha agente/terminal. Guard por id (não reentra no
+          // build; cobre uma nova aba vazia criada depois na mesma pane).
+          if (!enableAgent) {
+            if (_autoTerminalFor != agent.id) {
+              _autoTerminalFor = agent.id;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) widget.onFillEmpty(true);
+              });
+            }
+            return ColoredBox(color: context.colors.panel);
+          }
           if (_showAgentSetup) {
             return AgentSetupChecklist(
               onReady: () => widget.onFillEmpty(false),

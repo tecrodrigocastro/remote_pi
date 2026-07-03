@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:cockpit/app/core/app_intents.dart';
 import 'package:cockpit/app/cockpit/domain/entities/project.dart';
 import 'package:cockpit/app/core/routes.dart';
+import 'package:cockpit/app/core/ui/menu/workspace_menu_bridge.dart';
 import 'package:cockpit/app/cockpit/ui/session/agent_session.dart';
 import 'package:cockpit/app/cockpit/ui/states/pane_node.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
@@ -71,6 +72,11 @@ class _CockpitPageState extends State<CockpitPage> {
     // Os módulos provêm via `.new`, então não encadeiam mais `..init()`/`..check()`.
     context.read<CockpitViewModel>().init();
     context.read<UpdateViewModel>().check();
+    // Publica o estado do workspace no menu File (New Agent / New Terminal): só
+    // habilitam quando há workspace ativo. Re-sincroniza a cada mudança da VM.
+    _workspaceMenu = context.read<WorkspaceMenuBridge>();
+    _menuVm = context.read<CockpitViewModel>()..addListener(_syncWorkspaceMenu);
+    _syncWorkspaceMenu();
     // Mantém os overrides de comando do LSP (tela "Language") em sync com o pool:
     // empurra o estado atual e re-empurra a cada mudança das Configurações.
     _settings = context.read<SettingsController>()
@@ -90,6 +96,48 @@ class _CockpitPageState extends State<CockpitPage> {
 
   SettingsController? _settings;
   Map<String, String> _lastLspCommands = const <String, String>{};
+
+  /// Bridge do menu File (New Agent/Terminal) + a VM que observamos pra saber se
+  /// há workspace ativo. Capturados no [initState] pra uso seguro no [dispose].
+  WorkspaceMenuBridge? _workspaceMenu;
+  CockpitViewModel? _menuVm;
+
+  /// Espelha "há workspace ativo?" no menu; os callbacks abrem uma aba nova no
+  /// workspace ativo (root do projeto). `setWorkspace` só notifica quando o
+  /// booleano muda, então chamar a cada evento da VM é barato.
+  void _syncWorkspaceMenu() {
+    final vm = _menuVm;
+    if (vm == null) return;
+    _workspaceMenu?.setWorkspace(
+      hasWorkspace: vm.selectedProject != null,
+      agentTabsInUse: vm.hasAgentTabsInUse,
+      // Agente pergunta a subpasta onde vai atuar (igual ao fluxo direto de
+      // criar agente); terminal abre direto na raiz do workspace.
+      onNewAgent: () => unawaited(
+        _pickSubfolderThen((sub) => vm.newTabIn(sub, terminal: false)),
+      ),
+      onNewTerminal: () => vm.newTabIn('', terminal: true),
+      onSplitRight: () => _splitFocused(SplitDir.vertical),
+      onSplitDown: () => _splitFocused(SplitDir.horizontal),
+      onToggleRail: vm.toggleRail,
+      onToggleFiles: vm.toggleTree,
+    );
+  }
+
+  /// Divide a pane **focada** na direção [dir]. Terminal abre direto na raiz;
+  /// agente pergunta a subpasta — mesma regra do menu de split da pane.
+  void _splitFocused(SplitDir dir) {
+    final vm = _vm;
+    final projectId = vm.selectedProject?.id;
+    if (projectId == null) return;
+    final paneId = vm.focusedPaneId(projectId);
+    if (paneId == null) return;
+    if (vm.paneActiveIsTerminal(paneId)) {
+      vm.splitPane(paneId, dir, '');
+    } else {
+      unawaited(_pickSubfolderThen((sub) => vm.splitPane(paneId, dir, sub)));
+    }
+  }
 
   /// Espelha o toggle de Notificações (aba das Configurações) para a VM, que
   /// gateia o disparo de fim de turno. A VM é page-scoped e não vê o
@@ -117,6 +165,8 @@ class _CockpitPageState extends State<CockpitPage> {
   void dispose() {
     _settings?.removeListener(_syncLspCommands);
     _settings?.removeListener(_syncNotifications);
+    _menuVm?.removeListener(_syncWorkspaceMenu);
+    _workspaceMenu?.setWorkspace(hasWorkspace: false);
     if (requestFocusActiveComposer == _focusActiveComposer) {
       requestFocusActiveComposer = null;
     }
@@ -607,11 +657,15 @@ class _CockpitPageState extends State<CockpitPage> {
           vm: vm,
           focused: node.id == vm.focusedPaneId(projectId),
           onCreateTab: () => vm.newEmptyTab(node.id),
-          onSplit: (dir) =>
-              _pickSubfolderThen((sub) => vm.splitPane(node.id, dir, sub)),
-          onFillEmpty: (emptyId, terminal) => _pickSubfolderThen(
-            (sub) => vm.fillEmpty(node.id, emptyId, sub, terminal: terminal),
-          ),
+          // Terminal abre direto na raiz do workspace; agente pergunta a subpasta.
+          onSplit: (dir) => vm.paneActiveIsTerminal(node.id)
+              ? vm.splitPane(node.id, dir, '')
+              : _pickSubfolderThen((sub) => vm.splitPane(node.id, dir, sub)),
+          onFillEmpty: (emptyId, terminal) => terminal
+              ? vm.fillEmpty(node.id, emptyId, '', terminal: true)
+              : _pickSubfolderThen(
+                  (sub) => vm.fillEmpty(node.id, emptyId, sub, terminal: false),
+                ),
           onHistoryAgent: _openHistory,
           onRenameAgent: _renameAgent,
           onToggleRelayAgent: _toggleRelayAgent,

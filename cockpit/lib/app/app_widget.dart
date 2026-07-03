@@ -3,7 +3,9 @@ import 'dart:io' show Platform;
 import 'package:cockpit/app/core/domain/entities/app_settings.dart';
 import 'package:cockpit/app/core/app_intents.dart';
 import 'package:cockpit/app/core/ui/menu/app_menu_bar.dart';
+import 'package:cockpit/app/core/ui/menu/editor_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/menu/menu_model.dart';
+import 'package:cockpit/app/core/ui/menu/workspace_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
@@ -26,8 +28,11 @@ class AppRoot extends StatelessWidget {
     final uiScale = s.interfaceSize / 14.0;
     // Fonte de verdade dos menus (usada pelo menu nativo do macOS aqui e pela
     // barra desenhada da janela [WindowMenuBar] no Windows/Linux, montada na
-    // barra de título do shell).
-    final menus = buildAppMenus(controller);
+    // barra de título do shell). `watch` no bridge do editor → o menu File
+    // (Save/Discard/Format) reconstrói e re-habilita conforme a aba focada.
+    final editor = context.watch<EditorMenuBridge>();
+    final workspace = context.watch<WorkspaceMenuBridge>();
+    final menus = buildAppMenus(controller, editor, workspace);
     final app = ShadcnApp.router(
       title: 'Cockpit',
       debugShowCheckedModeBanner: false,
@@ -54,22 +59,27 @@ class AppRoot extends StatelessWidget {
             ..._focusBindings(),
             if (!Platform.isMacOS) ...menuShortcuts(menus),
           },
-          child: _AppZoom(
-            scale: uiScale,
-            child: CockpitTheme(
-              colors: tokens.colors,
-              typo: tokens.typo,
-              syntax: tokens.syntax,
-              child: child ?? const SizedBox(),
+          // macOS: barra de menu **nativa** do SO — o [AppMenuBar] envolve com um
+          // `PlatformMenuBar`. Fica **abaixo** do `ShadcnApp` (dentro do builder,
+          // com `View`/`MediaQuery` ancestrais): acima dele o `setMenus` do engine
+          // não é aplicado. Windows/Linux: no-op aqui — a barra é desenhada na
+          // barra de título do shell pelo [WindowMenuBar].
+          child: AppMenuBar(
+            menus: menus,
+            child: _AppZoom(
+              scale: uiScale,
+              child: CockpitTheme(
+                colors: tokens.colors,
+                typo: tokens.typo,
+                syntax: tokens.syntax,
+                child: child ?? const SizedBox(),
+              ),
             ),
           ),
         );
       },
     );
-    // macOS: barra de menu **nativa** do SO (o [AppMenuBar] envolve o app com um
-    // `PlatformMenuBar`). Windows/Linux: no-op aqui — a barra é desenhada dentro
-    // da janela pelo [WindowMenuBar], montado na barra de título do shell.
-    return AppMenuBar(menus: menus, child: app);
+    return app;
   }
 
   ThemeMode _themeMode(AppThemeMode mode) => switch (mode) {

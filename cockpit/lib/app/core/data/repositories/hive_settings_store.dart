@@ -15,7 +15,19 @@ class HiveSettingsStore implements SettingsStore {
   @override
   Future<AppSettings> load() async {
     final raw = _box.get(_key);
-    if (raw is Map) return AppSettings.fromJson(raw);
+    if (raw is Map) {
+      final settings = AppSettings.fromJson(raw);
+      // Migração: um registro salvo por uma versão ANTERIOR à flag `enableAgent`
+      // não tem essa chave. Esses usuários já usavam agentes → preservamos
+      // ligando a flag (e persistindo, pra não re-migrar). Instalação nova nunca
+      // cai aqui: ou não tem registro (fresh), ou já grava a chave (= false).
+      if (!raw.containsKey('enableAgent')) {
+        final migrated = settings.copyWith(enableAgent: true);
+        await save(migrated);
+        return migrated;
+      }
+      return settings;
+    }
     return const AppSettings();
   }
 

@@ -26,6 +26,7 @@ class AppSettings {
     this.soundEnabled = true,
     this.searchPanelHeight = 260,
     this.tasksPanelHeight = 200,
+    this.enableAgent = false,
   });
 
   final AppThemeMode themeMode;
@@ -83,6 +84,12 @@ class AppSettings {
   /// Altura (px) da área de lista do subpane de Tasks (redimensionável).
   final double tasksPanelHeight;
 
+  /// Habilita o suporte a **agentes** (abas de `pi`). Desligado por padrão em
+  /// instalações novas (experiência terminal-first); ligado por migração para
+  /// quem já usava agentes numa versão anterior (ver `HiveSettingsStore.load`).
+  /// Com ela desligada, o app não oferece criar aba de agente (só terminal).
+  final bool enableAgent;
+
   AppSettings copyWith({
     AppThemeMode? themeMode,
     String? interfaceFont,
@@ -103,6 +110,7 @@ class AppSettings {
     bool? soundEnabled,
     double? searchPanelHeight,
     double? tasksPanelHeight,
+    bool? enableAgent,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -125,6 +133,7 @@ class AppSettings {
       soundEnabled: soundEnabled ?? this.soundEnabled,
       searchPanelHeight: searchPanelHeight ?? this.searchPanelHeight,
       tasksPanelHeight: tasksPanelHeight ?? this.tasksPanelHeight,
+      enableAgent: enableAgent ?? this.enableAgent,
     );
   }
 
@@ -145,6 +154,9 @@ class AppSettings {
     if (!soundEnabled) 'soundEnabled': false,
     'searchPanelHeight': searchPanelHeight,
     'tasksPanelHeight': tasksPanelHeight,
+    // Sempre gravado (mesmo quando false) para a migração distinguir "install
+    // novo" (chave presente = false) de "upgrade sem a flag" (chave ausente).
+    'enableAgent': enableAgent,
   };
 
   factory AppSettings.fromJson(Map<dynamic, dynamic> json) {
@@ -179,6 +191,7 @@ class AppSettings {
       searchPanelHeight:
           (json['searchPanelHeight'] as num?)?.toDouble() ?? 260,
       tasksPanelHeight: (json['tasksPanelHeight'] as num?)?.toDouble() ?? 200,
+      enableAgent: json['enableAgent'] as bool? ?? false,
     );
   }
 }

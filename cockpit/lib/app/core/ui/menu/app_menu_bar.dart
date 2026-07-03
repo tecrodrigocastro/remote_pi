@@ -1,7 +1,9 @@
 import 'dart:io' show Platform;
 
 import 'package:cockpit/app/core/app_intents.dart';
+import 'package:cockpit/app/core/ui/menu/editor_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/menu/menu_model.dart';
+import 'package:cockpit/app/core/ui/menu/workspace_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
@@ -16,7 +18,11 @@ import 'package:window_manager/window_manager.dart';
 /// (zoom/tamanho da interface) e as pontes globais de `app_intents.dart` (abrir
 /// configurações/projeto, checar updates) — resolvidas pelo `CockpitPage`, então
 /// `null`-safe enquanto o shell não montou.
-List<MenuBarMenu> buildAppMenus(SettingsController controller) {
+List<MenuBarMenu> buildAppMenus(
+  SettingsController controller,
+  EditorMenuBridge editor,
+  WorkspaceMenuBridge workspace,
+) {
   void zoom(double delta) => controller.setInterfaceSize(
     (controller.settings.interfaceSize + delta).clamp(11.0, 22.0),
   );
@@ -27,12 +33,12 @@ List<MenuBarMenu> buildAppMenus(SettingsController controller) {
       const MenuRole(MenuBarRole.about),
       const MenuSeparator(),
       MenuAction(
-        'Configurações…',
+        'Settings…',
         accelerator: const MenuAccelerator(LogicalKeyboardKey.comma),
         onSelected: () => requestOpenSettings?.call(),
       ),
       MenuAction(
-        'Verificar atualizações…',
+        'Check for Updates…',
         onSelected: () => requestCheckForUpdates?.call(),
       ),
       const MenuSeparator(),
@@ -44,22 +50,96 @@ List<MenuBarMenu> buildAppMenus(SettingsController controller) {
       const MenuSeparator(),
       const MenuRole(MenuBarRole.quit),
     ]),
-    MenuBarMenu('Arquivo', <MenuNode>[
+    MenuBarMenu('File', <MenuNode>[
+      // New Agent/Terminal abrem uma aba no workspace ativo (via CockpitPage →
+      // newTabIn). Só habilitam quando há workspace selecionado. "New Agent" só
+      // aparece quando o suporte a agentes está ligado (Settings → General).
+      if (controller.settings.enableAgent)
+        MenuAction(
+          'New Agent',
+          onSelected: workspace.hasWorkspace ? workspace.newAgent : null,
+        ),
       MenuAction(
-        'Abrir projeto…',
+        'New Terminal',
+        onSelected: workspace.hasWorkspace ? workspace.newTerminal : null,
+      ),
+      const MenuSeparator(),
+      MenuAction(
+        'Open Workspace',
         accelerator: const MenuAccelerator(LogicalKeyboardKey.keyO),
         onSelected: () => requestOpenProject?.call(),
       ),
+      const MenuSeparator(),
+      // Save/Discard/Format só ficam ativos quando há uma aba de edição focada
+      // que **de fato** pode a ação (dirty p/ Save/Discard; editável p/ Format) —
+      // estado publicado pelo `FileViewer` focado via [EditorMenuBridge]. Sem
+      // acelerador aqui: o próprio editor já trata ⌘S/⇧⌘F em todas as plataformas
+      // (evita disparo duplo). `onSelected` null = item cinza/desabilitado.
+      MenuAction(
+        'Save',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyS),
+        shortcutHandledExternally: true,
+        onSelected: editor.canSave ? editor.save : null,
+      ),
+      MenuAction(
+        'Discard',
+        onSelected: editor.canDiscard ? editor.discard : null,
+      ),
+      MenuAction(
+        'Format',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyF, shift: true),
+        shortcutHandledExternally: true,
+        onSelected: editor.canFormat ? editor.format : null,
+      ),
     ]),
-    // Zoom sem acelerador aqui de propósito: ⌘=/⌘-/⌘0 já vivem no
-    // `CallbackShortcuts` do `AppRoot` (todas as plataformas). Declará-los aqui
-    // dispararia a ação duas vezes no macOS (menu nativo + shortcut).
-    MenuBarMenu('Visualizar', <MenuNode>[
-      MenuAction('Aumentar tamanho', onSelected: () => zoom(1)),
-      MenuAction('Diminuir tamanho', onSelected: () => zoom(-1)),
-      MenuAction('Tamanho padrão', onSelected: () => controller.setInterfaceSize(14)),
+    // Zoom: aceleradores só EXIBIDOS (hint) — a tecla já é tratada pelo
+    // `_zoomBindings` do `AppRoot` em todas as plataformas. `shortcutHandledExternally`
+    // impede o `menuShortcuts` de registrar de novo fora do macOS (disparo duplo).
+    MenuBarMenu('View', <MenuNode>[
+      // Layout do workspace (ativos só com workspace aberto). Aceleradores reais:
+      // no macOS o menu nativo dispara; fora dele o `menuShortcuts` registra.
+      MenuAction(
+        'Toggle Workspace Panel',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyB),
+        onSelected: workspace.hasWorkspace ? workspace.toggleRail : null,
+      ),
+      MenuAction(
+        'Toggle Files',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyB, shift: true),
+        onSelected: workspace.hasWorkspace ? workspace.toggleFiles : null,
+      ),
+      const MenuSeparator(),
+      MenuAction(
+        'Split Right',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyD),
+        onSelected: workspace.hasWorkspace ? workspace.splitRight : null,
+      ),
+      MenuAction(
+        'Split Down',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.keyD, shift: true),
+        onSelected: workspace.hasWorkspace ? workspace.splitDown : null,
+      ),
+      const MenuSeparator(),
+      MenuAction(
+        'Zoom In',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.equal),
+        shortcutHandledExternally: true,
+        onSelected: () => zoom(1),
+      ),
+      MenuAction(
+        'Zoom Out',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.minus),
+        shortcutHandledExternally: true,
+        onSelected: () => zoom(-1),
+      ),
+      MenuAction(
+        'Actual Size',
+        accelerator: const MenuAccelerator(LogicalKeyboardKey.digit0),
+        shortcutHandledExternally: true,
+        onSelected: () => controller.setInterfaceSize(14),
+      ),
     ]),
-    const MenuBarMenu('Janela', <MenuNode>[
+    const MenuBarMenu('Window', <MenuNode>[
       MenuRole(MenuBarRole.minimizeWindow),
       MenuRole(MenuBarRole.zoomWindow),
     ]),
@@ -228,8 +308,8 @@ void Function()? _windowRole(MenuBarRole role) => switch (role) {
 };
 
 String _roleLabel(MenuBarRole role) => switch (role) {
-  MenuBarRole.quit => 'Sair',
-  MenuBarRole.minimizeWindow => 'Minimizar',
-  MenuBarRole.zoomWindow => 'Maximizar',
+  MenuBarRole.quit => 'Quit',
+  MenuBarRole.minimizeWindow => 'Minimize',
+  MenuBarRole.zoomWindow => 'Zoom',
   _ => '',
 };

@@ -240,6 +240,13 @@ class CockpitViewModel extends ChangeNotifier {
       List<LaunchableApp>.unmodifiable(_availableApps);
   PaneItem? session(String id) => _sessions[id];
 
+  /// `true` se existe ao menos uma aba de agente **real** (não o placeholder
+  /// vazio `AgentStatus.empty`). Usado pra impedir desligar `enableAgent` com
+  /// agentes em uso.
+  bool get hasAgentTabsInUse => _sessions.values
+      .whereType<AgentSession>()
+      .any((a) => a.status != AgentStatus.empty);
+
   /// Estado git do projeto (branch + sujos), ou `null` se não for repo git.
   GitInfo? gitInfo(String projectId) => _gitInfo[projectId];
 
@@ -1159,6 +1166,17 @@ class CockpitViewModel extends ChangeNotifier {
     if (replaceEmpty) _disposeSession(leaf.active);
     _focused[projectId] = leaf.id;
     notifyListeners();
+  }
+
+  /// `true` se a aba ativa da pane [paneId] é um terminal. O split espelha esse
+  /// tipo (terminal→terminal), então o call site usa isso pra decidir se pergunta
+  /// a subpasta (agente) ou abre direto na raiz (terminal).
+  bool paneActiveIsTerminal(String paneId) {
+    final tree = _activeTree;
+    if (tree == null) return false;
+    final leaf = findLeaf(tree, paneId);
+    final active = leaf == null ? null : _sessions[leaf.active];
+    return active is TerminalSession;
   }
 
   /// Divide a pane criando um agente novo ao lado/abaixo.
