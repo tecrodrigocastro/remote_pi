@@ -540,6 +540,7 @@ class _TabState extends State<_Tab> {
     final isEmpty = agent?.status == AgentStatus.empty;
     final viewer = s is FileViewerSession ? s : null;
     final isPreview = viewer?.isPreview ?? false;
+    final terminal = s is TerminalSession ? s : null;
 
     final value = await showAppMenu<String>(
       menuCtx,
@@ -550,6 +551,14 @@ class _TabState extends State<_Tab> {
             value: 'pin',
             label: 'Pin tab',
             icon: Icons.push_pin_outlined,
+          ),
+        // Só em abas de terminal: o id (pane id) copiável pra usar na CLI
+        // `cockpit` (`--tab-id`).
+        if (terminal != null)
+          const AppMenuItem(
+            value: 'copy-id',
+            label: 'Copy tab id',
+            icon: Icons.content_copy,
           ),
         if (agent != null && !isEmpty) ...[
           const AppMenuItem(
@@ -576,6 +585,10 @@ class _TabState extends State<_Tab> {
     switch (value) {
       case 'pin':
         if (viewer != null) viewer.pin();
+      case 'copy-id':
+        if (terminal != null) {
+          await Clipboard.setData(ClipboardData(text: terminal.id));
+        }
       case 'rename':
         _startEditing();
       case 'relay':

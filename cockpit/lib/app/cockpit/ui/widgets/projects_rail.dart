@@ -369,6 +369,7 @@ class _ProjectItem extends StatelessWidget {
               const SizedBox(width: 4),
             ],
             _MenuButton(
+              workspaceId: project.id,
               canCreateWorktree: canCreateWorktree,
               onConfigure: onConfigure,
               onDelete: onDelete,
@@ -706,12 +707,16 @@ class _AheadBehind extends StatelessWidget {
 /// repo git) / Configurações / Deletar.
 class _MenuButton extends StatelessWidget {
   const _MenuButton({
+    required this.workspaceId,
     required this.canCreateWorktree,
     required this.onConfigure,
     required this.onDelete,
     required this.onCreateWorktree,
   });
 
+  /// Id do workspace (`projectId`) — copiável pra usar na CLI `cockpit`
+  /// (`--workspace-id` / filtros de `list-panes`).
+  final String workspaceId;
   final bool canCreateWorktree;
   final VoidCallback onConfigure;
   final VoidCallback onDelete;
@@ -729,6 +734,11 @@ class _MenuButton extends StatelessWidget {
             icon: Icons.call_split,
           ),
         const AppMenuItem(
+          value: 'copy-id',
+          label: 'Copy workspace id',
+          icon: Icons.content_copy,
+        ),
+        const AppMenuItem(
           value: 'config',
           label: 'Settings',
           icon: Icons.settings_outlined,
@@ -742,6 +752,9 @@ class _MenuButton extends StatelessWidget {
       ],
     );
     if (pick == 'worktree') onCreateWorktree();
+    if (pick == 'copy-id') {
+      await Clipboard.setData(ClipboardData(text: workspaceId));
+    }
     if (pick == 'config') onConfigure();
     if (pick == 'delete') onDelete();
   }
