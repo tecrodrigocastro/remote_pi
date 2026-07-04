@@ -84,6 +84,15 @@ class _CockpitPageState extends State<CockpitPage> {
       ..addListener(_syncNotifications);
     _syncLspCommands();
     _syncNotifications();
+    // Restaura a visibilidade dos painéis (rail/árvore) salva na sessão anterior
+    // e persiste de volta a cada toggle. A VM é a fonte de verdade em runtime.
+    final vm = context.read<CockpitViewModel>();
+    vm.restorePanelVisibility(
+      rail: _settings!.settings.railVisible,
+      tree: _settings!.settings.treeVisible,
+    );
+    vm.onPanelVisibilityChanged = (rail, tree) =>
+        _settings!.setPanelVisibility(rail: rail, tree: tree);
     _searchHeight = _settings!.settings.searchPanelHeight.clamp(
       _searchMin,
       _searchMax,
@@ -468,21 +477,8 @@ class _CockpitPageState extends State<CockpitPage> {
                 projectName: vm.selectedDisplayTitle ?? 'Cockpit',
                 railVisible: vm.railVisible,
                 treeVisible: vm.treeVisible,
-                openEnabled: vm.selectedProject != null,
                 onToggleRail: vm.toggleRail,
                 onToggleTree: vm.toggleTree,
-                availableApps: vm.availableApps,
-                lastOpenAppId: context.select<SettingsController, String?>(
-                  (c) => c.settings.lastOpenAppId,
-                ),
-                onOpenInApp: (id) {
-                  final app = vm.availableApps
-                      .where((a) => a.id == id)
-                      .firstOrNull;
-                  if (app == null) return;
-                  context.read<SettingsController>().setLastOpenApp(id);
-                  unawaited(vm.openProjectInApp(app));
-                },
               ),
               Expanded(
                 child: Row(
