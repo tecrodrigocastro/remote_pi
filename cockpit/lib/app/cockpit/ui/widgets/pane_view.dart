@@ -1160,6 +1160,15 @@ class _PaneBodyState extends State<_PaneBody> {
               // Intercepta o atalho de colar pra suportar IMAGEM do clipboard
               // (o paste padrão do xterm só cola texto). Ver `_onTerminalKey`.
               onKeyEvent: (event) => _onTerminalKey(event, item),
+              // Cmd+clique num caminho de arquivo do buffer → abre no FileViewer,
+              // resolvido contra o cwd vivo do shell (OSC 7).
+              onOpenFile: (path, {line}) => context
+                  .read<CockpitViewModel>()
+                  .openTerminalPath(
+                    path,
+                    cwd: item.currentDirectory,
+                    line: line,
+                  ),
               theme: cockpitTerminalThemeFor(Theme.of(context).brightness),
               textStyle: termStyle,
             ),

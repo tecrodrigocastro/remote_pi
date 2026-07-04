@@ -196,11 +196,13 @@ class CockpitViewModel extends ChangeNotifier {
   void Function(bool rail, bool tree)? onPanelVisibilityChanged;
 
   /// Restaura a visibilidade dos painéis a partir das preferências salvas.
-  /// Chamado uma vez pela página no mount, sem persistir de volta.
+  /// Chamado uma vez pela página no `initState`, sem persistir de volta. **Não**
+  /// notifica: roda antes do primeiro build (que já lê os campos frescos), e
+  /// notificar aqui dispara `markNeedsBuild` no `_VMInherited` durante o build
+  /// ("setState() called during build").
   void restorePanelVisibility({required bool rail, required bool tree}) {
     _railVisible = rail;
     _treeVisible = tree;
-    notifyListeners();
   }
 
   void _persistPanels() =>
@@ -676,6 +678,60 @@ class CockpitViewModel extends ChangeNotifier {
     final root = selectedProject?.path;
     if (root == null) return null;
     return '$root/$relative';
+  }
+
+  /// Abre um arquivo referenciado no **terminal** (Cmd+clique). [token] pode ser
+  /// absoluto, relativo ao [cwd] vivo do shell (OSC 7) ou começar com `~`. Abre
+  /// aba normal e revela [line] (base 1) quando informada. Sem-op se o token não
+  /// resolve. O FileViewer trata caminho inexistente por conta própria.
+  Future<void> openTerminalPath(String token, {String? cwd, int? line}) async {
+    final abs = _resolveTerminalPath(token, cwd);
+    if (abs == null) return;
+    await openFile(abs, isPreview: false);
+    if (line != null) {
+      for (final s in _sessions.values) {
+        if (s is FileViewerSession && s.path == abs) s.reveal(line);
+      }
+    }
+  }
+
+  /// Resolve um token de caminho do terminal para absoluto: expande `~`, junta
+  /// com [cwd] se relativo, e normaliza `.`/`..`. `null` se não dá pra resolver.
+  String? _resolveTerminalPath(String token, String? cwd) {
+    var t = token.trim();
+    if (t.isEmpty) return null;
+    if (t == '~' || t.startsWith('~/')) {
+      final home = userHome();
+      if (home == null) return null;
+      t = t == '~' ? home : '$home/${t.substring(2)}';
+    }
+    final isAbsolute = t.startsWith('/') ||
+        (Platform.isWindows && RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(t));
+    if (!isAbsolute) {
+      if (cwd == null || cwd.isEmpty) return null;
+      t = '$cwd/$t';
+    }
+    return _normalizePath(t);
+  }
+
+  /// Colapsa segmentos `.` e `..` de um caminho POSIX-ish (mantém a raiz `/`).
+  String _normalizePath(String path) {
+    final isAbs = path.startsWith('/');
+    final out = <String>[];
+    for (final part in path.split('/')) {
+      if (part.isEmpty || part == '.') continue;
+      if (part == '..') {
+        if (out.isNotEmpty && out.last != '..') {
+          out.removeLast();
+        } else if (!isAbs) {
+          out.add('..');
+        }
+      } else {
+        out.add(part);
+      }
+    }
+    final joined = out.join('/');
+    return isAbs ? '/$joined' : joined;
   }
 
   /// Abre um arquivo do projeto **por caminho relativo** (palette Cmd+P). Aba
@@ -1925,15 +1981,15 @@ class CockpitViewModel extends ChangeNotifier {
         final id = c.tabId;
         if (id == null || id.isEmpty) {
           return const CockpitCommandResult.fail(
-            'tabId ausente (use --tab-id ou rode dentro de um terminal do Cockpit)',
+            'missing tabId (use --tab-id or run inside a Cockpit terminal)',
           );
         }
         final s = _sessions[id];
         if (s == null) {
-          return CockpitCommandResult.fail('pane "$id" não existe');
+          return CockpitCommandResult.fail('pane "$id" does not exist');
         }
         if (s is! TerminalSession) {
-          return CockpitCommandResult.fail('pane "$id" não é um terminal');
+          return CockpitCommandResult.fail('pane "$id" is not a terminal');
         }
         final raw = (c.args['data'] ?? '').toString();
         String text;
@@ -1941,7 +1997,7 @@ class CockpitViewModel extends ChangeNotifier {
           text = utf8.decode(base64.decode(raw));
         } catch (_) {
           return const CockpitCommandResult.fail(
-            'data inválido (base64 esperado)',
+            'invalid data (base64 expected)',
           );
         }
         s.insertText(text);
@@ -1968,10 +2024,10 @@ class CockpitViewModel extends ChangeNotifier {
       case 'open':
         final path = (c.args['path'] ?? '').toString();
         if (path.isEmpty) {
-          return const CockpitCommandResult.fail('path ausente');
+          return const CockpitCommandResult.fail('missing path');
         }
         if (!await File(path).exists()) {
-          return CockpitCommandResult.fail('arquivo não encontrado: "$path"');
+          return CockpitCommandResult.fail('file not found: "$path"');
         }
         final from = c.tabId;
         String? targetProject;
@@ -1988,7 +2044,7 @@ class CockpitViewModel extends ChangeNotifier {
         }
         if (_selectedProjectId == null) {
           return const CockpitCommandResult.fail(
-            'nenhum workspace ativo pra abrir o arquivo',
+            'no active workspace to open the file in',
           );
         }
         await openFile(path, inPane: targetLeaf, isPreview: false);
@@ -2009,7 +2065,7 @@ class CockpitViewModel extends ChangeNotifier {
         return CockpitCommandResult.ok(ws);
 
       default:
-        return CockpitCommandResult.fail('comando desconhecido: "${c.cmd}"');
+        return CockpitCommandResult.fail('unknown command: "${c.cmd}"');
     }
   }
 

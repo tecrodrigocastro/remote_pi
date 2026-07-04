@@ -30,6 +30,7 @@ class TerminalPane extends StatefulWidget {
     required this.theme,
     required this.onKeyEvent,
     this.hardwareKeyboardOnly = false,
+    this.onOpenFile,
   });
 
   final Terminal terminal;
@@ -38,6 +39,11 @@ class TerminalPane extends StatefulWidget {
   final TerminalTheme theme;
   final KeyEventResult Function(KeyEvent event) onKeyEvent;
   final bool hardwareKeyboardOnly;
+
+  /// Cmd+clique num caminho de arquivo do buffer → abre no FileViewer. `null`
+  /// desliga a detecção de arquivos (mantém só URLs). [line] vem do sufixo
+  /// `arquivo:42`, quando presente.
+  final void Function(String path, {int? line})? onOpenFile;
 
   @override
   State<TerminalPane> createState() => _TerminalPaneState();
@@ -144,6 +150,7 @@ class _TerminalPaneState extends State<TerminalPane>
         ? _linkDetector.linkAt(
             widget.terminal,
             r.getCellOffset(r.globalToLocal(global)),
+            detectFiles: widget.onOpenFile != null,
           )
         : null;
     _setHoverLink(link);
@@ -151,7 +158,7 @@ class _TerminalPaneState extends State<TerminalPane>
 
   void _setHoverLink(TerminalLink? link) {
     final same =
-        link?.url == _hoverLink?.url &&
+        link?.target == _hoverLink?.target &&
         link?.row == _hoverLink?.row &&
         link?.startCol == _hoverLink?.startCol;
     if (same) return;
@@ -255,9 +262,15 @@ class _TerminalPaneState extends State<TerminalPane>
       _tuiLastCell = null;
       return;
     }
-    // Cmd+clique (sem arraste) sobre um link → abre no navegador.
+    // Cmd+clique (sem arraste) sobre um link → arquivo abre no FileViewer, URL
+    // no navegador.
     if (_isCmd && !_selecting && _hoverLink != null) {
-      _openLink(_hoverLink!.url);
+      final link = _hoverLink!;
+      if (link.kind == TerminalLinkKind.file) {
+        widget.onOpenFile?.call(link.target, line: link.line);
+      } else {
+        _openLink(link.target);
+      }
     }
     _finishSelecting();
   }
