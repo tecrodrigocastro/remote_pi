@@ -116,13 +116,16 @@ class _FileViewerState extends State<FileViewer> {
     _ => null,
   };
 
-  /// Linguagem pro highlight: extensão (texto), `markdown` ou `xml` (svg).
-  String? get _language => switch (widget.session.view) {
-    FileViewText(:final language) => language,
-    FileViewMarkdown() => 'markdown',
-    FileViewSvg() => 'xml',
-    _ => null,
-  };
+  /// Linguagem pro highlight: nome de arquivo especial (`.env*`), extensão
+  /// (texto), `markdown` ou `xml` (svg).
+  String? get _language =>
+      filenameLanguageOf(widget.session.path) ??
+      switch (widget.session.view) {
+        FileViewText(:final language) => language,
+        FileViewMarkdown() => 'markdown',
+        FileViewSvg() => 'xml',
+        _ => null,
+      };
 
   /// Tem modo renderizado além da fonte (markdown/svg) → mostra o switch
   /// Preview/Source. Demais textos/códigos entram direto em edição (sem toggle).
@@ -176,7 +179,7 @@ class _FileViewerState extends State<FileViewer> {
   @override
   void didUpdateWidget(FileViewer old) {
     super.didUpdateWidget(old);
-    
+
     // Se o path mudou (preview reutilizado), força rebuild total.
     if (widget.session.path != _lastObservedPath) {
       final oldPath = _lastObservedPath;
@@ -231,7 +234,9 @@ class _FileViewerState extends State<FileViewer> {
           _ctrl!.text = text;
           _baseline = text;
           // O disco mudou (agente editou) → mantém o LSP em sync.
-          if (_lspOn) unawaited(_vm?.lspChangeDocument(widget.session.path, text));
+          if (_lspOn) {
+            unawaited(_vm?.lspChangeDocument(widget.session.path, text));
+          }
         }
       });
     }
@@ -385,7 +390,8 @@ class _FileViewerState extends State<FileViewer> {
     final int delta;
     if (down) {
       // Insere \n + bloco logo após a linha final; empurra o cursor pra cópia.
-      newText = '${text.substring(0, lineEnd)}\n$block${text.substring(lineEnd)}';
+      newText =
+          '${text.substring(0, lineEnd)}\n$block${text.substring(lineEnd)}';
       delta = block.length + 1;
     } else {
       // Insere bloco + \n antes da linha inicial; cursor fica na cópia de cima
@@ -779,7 +785,8 @@ class _FileViewerState extends State<FileViewer> {
             focusNode: _focus,
             revealLine: widget.session.revealLine,
             revealTick: widget.session.revealTick,
-            revealMatchStart: _findIndex >= 0 && _findIndex < _findMatches.length
+            revealMatchStart:
+                _findIndex >= 0 && _findIndex < _findMatches.length
                 ? _findMatches[_findIndex].start
                 : null,
             revealMatchTick: _findRevealTick,
