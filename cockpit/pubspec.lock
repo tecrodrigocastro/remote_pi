@@ -458,11 +458,11 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "v1.0.5"
-      resolved-ref: d4c7b26be04c3723e40818fa25b50781074eff9b
+      ref: "v1.0.6"
+      resolved-ref: bd775273c7d3ce6be94550950c83d2d7b8246e0e
       url: "https://github.com/jacobaraujo7/kyroon_pty"
     source: git
-    version: "1.0.5"
+    version: "1.0.6"
   leak_tracker:
     dependency: transitive
     description:

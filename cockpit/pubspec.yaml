@@ -157,13 +157,22 @@ dependency_overrides:
     git:
       url: https://github.com/jacobaraujo7/gpt_markdown
       ref: v1.2.2
-  # Fork com o fix da UB em build_working_directory (kyroon_pty_win.c), que
-  # quebrava o spawn de PTY no Windows ARM. PR aberto pro upstream
-  # (cesarmod2017/kyroon_pty); voltar pro pub.dev quando publicarem >= 1.0.5.
+  # Fork do kyroon_pty com dois fixes no `kyroon_pty_win.c`:
+  #
+  # 1. UB em `build_working_directory`, que quebrava o spawn de PTY no Windows
+  #    ARM (v1.0.5).
+  # 2. `build_command` duplicava o executável na command line do CreateProcessW
+  #    (`pwsh.exe pwsh.exe`), porque o `arguments[0]` já é o executável. Shells
+  #    tolerantes mascaravam (o powershell.exe abria um shell aninhado), mas o
+  #    PowerShell 7 recusa e o `wsl.exe -d <distro>` abria a distro ERRADA
+  #    (v1.0.6).
+  #
+  # PR aberto pro upstream (cesarmod2017/kyroon_pty); voltar pro pub.dev quando
+  # publicarem >= 1.0.6.
   kyroon_pty:
     git:
       url: https://github.com/jacobaraujo7/kyroon_pty
-      ref: v1.0.5
+      ref: v1.0.6
 
 dev_dependencies:
   flutter_test:
