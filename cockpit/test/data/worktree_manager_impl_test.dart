@@ -61,13 +61,16 @@ void main() {
     expect(wt.branch, 'feat/sso');
     expect(wt.isDetached, isFalse);
 
-    // guard rail: `.cockpit/` foi adicionado ao `.gitignore` do repo, então o
-    // checkout aninhado não aparece como untracked no status do usuário.
+    // Guard rail: o subdir das worktrees entrou no .gitignore da raiz e o
+    // repo principal não vê a pasta aninhada como untracked.
     final gitignore = File('${repo.path}/.gitignore');
     expect(gitignore.existsSync(), isTrue);
-    expect(gitignore.readAsStringSync(), contains('.cockpit/'));
-    final status = await git(['status', '--porcelain', '--ignored']);
-    expect(status.stdout.toString(), isNot(contains('worktrees/feat/sso')));
+    expect(
+      gitignore.readAsStringSync().split('\n'),
+      contains('.cockpit/worktrees/'),
+    );
+    final status = await git(['status', '--porcelain']);
+    expect(status.stdout.toString(), isNot(contains('.cockpit')));
 
     // list: exclui a raiz, inclui o novo fork.
     final list = await manager.list(repo.path);
