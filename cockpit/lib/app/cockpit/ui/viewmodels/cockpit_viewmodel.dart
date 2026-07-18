@@ -369,13 +369,18 @@ class CockpitViewModel extends ChangeNotifier {
     return _gitInfo[roots.first];
   }
 
-  /// Agregado pro chip da rail em multi-root: (nº de roots, roots sujas).
+  /// Agregado pro chip da rail em multi-root: (nº de roots, roots com
+  /// **alteração de arquivo**). Conta só `isDirty` — divergência de upstream
+  /// (ahead/behind) NÃO entra, senão o chip acende "· 1" numa root só com
+  /// commits não enviados/não puxados, sem nenhuma mudança de arquivo. Espelha
+  /// o [_GitBadge] single-root, que também usa só `isDirty` pro contador âmbar
+  /// (ahead/behind lá aparecem à parte como setas ↑/↓).
   (int roots, int dirtyRoots) rootsGitSummary(String projectId) {
     final roots = rootsOf(projectId);
     var dirty = 0;
     for (final r in roots) {
       final info = _gitInfo[r];
-      if (info != null && (info.isDirty || info.hasUpstreamDiff)) dirty++;
+      if (info != null && info.isDirty) dirty++;
     }
     return (roots.length, dirty);
   }
