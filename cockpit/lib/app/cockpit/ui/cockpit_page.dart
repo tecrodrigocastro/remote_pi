@@ -379,6 +379,9 @@ class _CockpitPageState extends State<CockpitPage> {
     final project = vm.selectedProject;
     if (project == null) return;
     final hasGit = root.git != null;
+    // "New agent here" só com agentes ligados (Settings → General → "Enable
+    // agents"); "New terminal here" segue sempre.
+    final agentsEnabled = context.read<SettingsController>().settings.enableAgent;
     final action = await showAppMenu<_RootMenuAction>(
       context,
       globalPosition: globalPosition,
@@ -412,11 +415,12 @@ class _CockpitPageState extends State<CockpitPage> {
           label: 'New terminal here',
           icon: Icons.terminal,
         ),
-        AppMenuItem(
-          value: _RootMenuAction.newAgent,
-          label: 'New agent here',
-          icon: Icons.smart_toy_outlined,
-        ),
+        if (agentsEnabled)
+          AppMenuItem(
+            value: _RootMenuAction.newAgent,
+            label: 'New agent here',
+            icon: Icons.smart_toy_outlined,
+          ),
         AppMenuItem(
           value: _RootMenuAction.reveal,
           label: 'Open with…',
