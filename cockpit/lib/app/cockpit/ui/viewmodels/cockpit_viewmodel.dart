@@ -1,6 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, File, FileSystemEvent, Platform;
+import 'dart:io'
+    show
+        Directory,
+        File,
+        FileSystemEntity,
+        FileSystemEntityType,
+        FileSystemEvent,
+        Platform;
 import 'dart:math' show max;
 
 import 'package:cockpit/app/core/data/setup/remote_pi_resolver.dart';
@@ -146,16 +153,25 @@ class CockpitViewModel extends ChangeNotifier {
   /// `true` enquanto reconstruímos um projeto — evita gravar layout meio-feito.
   bool _restoring = false;
 
-  /// Estado git por projeto (branch + sujos). `null` (ausente do mapa ou valor
-  /// null) = não é repo git → a rail mostra só o título.
+  /// Estado git por **root path** (branch + sujos). Para workspace single-root
+  /// a chave coincide com o `Project.id` (id == path), então o comportamento é
+  /// o histórico. Num multi-root há uma entrada por root; a pasta-mãe não tem
+  /// entrada própria. `null` = a root não é repo git.
   final Map<String, GitInfo?> _gitInfo = <String, GitInfo?>{};
 
-  /// Status git por **caminho relativo** (arquivos + pastas agregadas), por
-  /// projeto. Derivado de [_gitInfo]; alimenta a coloração da árvore de
+  /// Status git por **caminho relativo à root** (arquivos + pastas agregadas),
+  /// por root path. Derivado de [_gitInfo]; alimenta a coloração da árvore de
   /// arquivos. Pasta agrega o estado mais forte dos descendentes ([
   /// GitFileStatus.strongest]).
   final Map<String, Map<String, GitFileStatus>> _gitTree =
       <String, Map<String, GitFileStatus>>{};
+
+  /// Roots git derivadas por projeto (**runtime, nunca persistido** — a
+  /// existência mora no filesystem, mesmo espírito das worktrees/plano 42).
+  /// Regra implícita: raiz com `.git` → `[path]` (single-root, caso histórico);
+  /// raiz sem `.git` → filhas imediatas com `.git` (multi-root/multirepo);
+  /// nenhuma → `[path]` (pasta comum). Reavaliado a cada [_refreshGit].
+  final Map<String, List<String>> _rootsByProject = <String, List<String>>{};
 
   /// Watcher do working tree do projeto **selecionado** (filesystem ao vivo).
   /// Recriado ao trocar de projeto; debounce junta rajadas de eventos.
@@ -180,6 +196,12 @@ class CockpitViewModel extends ChangeNotifier {
   /// existência mora no git, não no Hive (decisões 4, 17). Os mesmos `Project`s
   /// também entram em [_projectList] (pro IndexedStack e o lookup).
   final Map<String, List<Project>> _worktrees = <String, List<Project>>{};
+
+  /// Root (path absoluto) que **originou** cada fork (fork.id → root path).
+  /// Em single-root é o próprio path do pai; em multi-root, o repo filho de
+  /// onde o `git worktree add` partiu — as ops de worktree (remove/merge/
+  /// namespace) rodam contra ela, nunca contra a pasta-mãe.
+  final Map<String, String> _forkOrigin = <String, String>{};
 
   /// Sobe a cada mutação na árvore (criar/renomear/deletar) — a `FileTreePanel`
   /// lê isso como token de refresh pra reler as pastas abertas (passo 3 da UI).
@@ -320,24 +342,67 @@ class CockpitViewModel extends ChangeNotifier {
     (a) => a.status != AgentStatus.empty,
   );
 
+  /// Roots git do projeto. Sempre não-vazio: single-root = `[path]`
+  /// (comportamento histórico, N=1); multi-root = as filhas-repo derivadas.
+  List<String> rootsOf(String projectId) {
+    final derived = _rootsByProject[projectId];
+    if (derived != null && derived.isNotEmpty) return derived;
+    final p = _projectById(projectId)?.path;
+    return p == null || p.isEmpty ? const [] : [p];
+  }
+
+  /// `true` quando o workspace é multi-root (pasta-mãe sem `.git` com 2+
+  /// repos filhos). Toda a UI multi-root é gateada por isto — N=1 nunca muda.
+  bool isMultiRoot(String projectId) => rootsOf(projectId).length > 1;
+
+  /// Estado git de uma **root** específica ([rootPath] absoluto).
+  GitInfo? gitInfoForRoot(String rootPath) => _gitInfo[rootPath];
+
   /// Estado git do projeto (branch + sujos), ou `null` se não for repo git.
-  GitInfo? gitInfo(String projectId) => _gitInfo[projectId];
+  /// Em multi-root não existe "o" GitInfo do workspace — devolve `null` (a
+  /// rail usa [rootsGitSummary] pro chip agregado).
+  GitInfo? gitInfo(String projectId) {
+    final roots = rootsOf(projectId);
+    if (roots.length != 1) return null;
+    return _gitInfo[roots.first];
+  }
+
+  /// Agregado pro chip da rail em multi-root: (nº de roots, roots sujas).
+  (int roots, int dirtyRoots) rootsGitSummary(String projectId) {
+    final roots = rootsOf(projectId);
+    var dirty = 0;
+    for (final r in roots) {
+      final info = _gitInfo[r];
+      if (info != null && (info.isDirty || info.hasUpstreamDiff)) dirty++;
+    }
+    return (roots.length, dirty);
+  }
+
+  /// Root (path absoluto) que contém [absolutePath] no projeto [projectId],
+  /// ou `null` se o caminho está fora de todas (ex.: solto na pasta-mãe).
+  String? rootContaining(String projectId, String absolutePath) {
+    for (final r in rootsOf(projectId)) {
+      if (absolutePath == r || absolutePath.startsWith('$r/')) return r;
+    }
+    return null;
+  }
 
   /// Status git (cor) de um caminho **absoluto** dentro do projeto selecionado —
   /// arquivo ou pasta (agregada). `null` = limpo/fora de repo. Usado pela árvore
-  /// de arquivos pra colorir cada linha.
+  /// de arquivos pra colorir cada linha. Resolve a **root** dona do caminho
+  /// (single-root: a própria raiz, como sempre).
   GitFileStatus? gitStatusForPath(String absolutePath) {
     final pid = _selectedProjectId;
     if (pid == null) return null;
-    final root = _projectById(pid)?.path;
+    final root = rootContaining(pid, absolutePath);
     if (root == null) return null;
     final rel = _subOf(absolutePath, root);
     if (rel.isEmpty) return null;
     // Mudança real (mapa agregado) vence; senão herda da raiz colapsada que
     // cobre este caminho — pasta untracked nova vs. ignorado.
-    final dirty = _gitTree[pid]?[rel];
+    final dirty = _gitTree[root]?[rel];
     if (dirty != null) return dirty;
-    final info = _gitInfo[pid];
+    final info = _gitInfo[root];
     if (info == null) return null;
     if (info.isUntracked(rel)) return GitFileStatus.untracked;
     if (info.isIgnored(rel)) return GitFileStatus.ignored;
@@ -545,29 +610,32 @@ class CockpitViewModel extends ChangeNotifier {
 
   // === Git diff viewer (feature "more git") ===
 
-  /// `true` se o workspace [projectId] é um repo git (tem [GitInfo]).
-  bool isGitRepo(String projectId) => _gitInfo[projectId] != null;
+  /// `true` se o workspace [projectId] tem git — single-root: a raiz é repo;
+  /// multi-root: qualquer root (habilita a aba Source Control).
+  bool isGitRepo(String projectId) =>
+      rootsOf(projectId).any((r) => _gitInfo[r] != null);
 
-  /// Status git (relativo → status) dos arquivos com mudança do projeto
-  /// [projectId], excluindo ignorados — insumo do filtro "source control".
-  Map<String, GitFileStatus> changedFiles(String projectId) {
-    final info = _gitInfo[projectId];
+  /// Status git (relativo à **root**) dos arquivos com mudança de uma root.
+  Map<String, GitFileStatus> changedFilesOfRoot(String rootPath) {
+    final info = _gitInfo[rootPath];
     if (info == null) return const {};
     return info.files;
   }
 
   /// Caminhos **absolutos** com mudança git do projeto selecionado (exclui
-  /// ignorados) — alimenta a árvore podada do modo Source Control.
+  /// ignorados), varrendo **todas as roots** — alimenta a árvore podada do
+  /// modo Source Control (que agrupa por root quando multi-root).
   List<String> changedAbsolutePaths() {
     final project = selectedProject;
     if (project == null) return const [];
-    var root = project.path;
-    if (root.endsWith('/')) root = root.substring(0, root.length - 1);
     final out = <String>[];
-    changedFiles(project.id).forEach((rel, status) {
-      if (status == GitFileStatus.ignored) return;
-      out.add('$root/$rel');
-    });
+    for (var root in rootsOf(project.id)) {
+      if (root.endsWith('/')) root = root.substring(0, root.length - 1);
+      changedFilesOfRoot(root).forEach((rel, status) {
+        if (status == GitFileStatus.ignored) return;
+        out.add('$root/$rel');
+      });
+    }
     return out;
   }
 
@@ -580,7 +648,8 @@ class CockpitViewModel extends ChangeNotifier {
     if (projectId == null || tree == null || paneId == null) return;
     final leaf = findLeaf(tree, paneId);
     if (leaf == null) return;
-    final root = _projectById(projectId)?.path;
+    // Diff roda contra a root que contém o arquivo (multi-root: o repo filho).
+    final root = rootContaining(projectId, path);
     if (root == null) return;
 
     // Já aberto? Seleciona (e fixa se não é preview).
@@ -1290,8 +1359,13 @@ class CockpitViewModel extends ChangeNotifier {
     }
     _focused.remove(id);
     _savedLayouts.remove(id);
-    _gitInfo.remove(id);
-    _gitTree.remove(id);
+    // Estado git é chaveado por root path (single-root: == id; multi-root:
+    // uma entrada por root derivada).
+    for (final root in _rootsByProject[id] ?? [id]) {
+      _gitInfo.remove(root);
+      _gitTree.remove(root);
+    }
+    _rootsByProject.remove(id);
     _saveTimers.remove(id)?.cancel();
   }
 
@@ -1300,20 +1374,31 @@ class CockpitViewModel extends ChangeNotifier {
   /// falha, devolve o erro do git pra mostrar inline no dialog (decisão 21).
   Future<Result<Project, WorktreeOpError>> createWorktree(
     String rootId,
-    String name,
-  ) async {
+    String name, {
+    String? rootPath,
+    String? baseRef,
+    String? layoutSourceId,
+  }) async {
     final root = _projectById(rootId);
     if (root == null) {
       return const Failure(WorktreeOpError('Workspace not found.'));
     }
-    final res = await _worktreeMgr.add(root.path, name);
+    // Multi-root: o `git worktree add` parte da root escolhida, não da mãe.
+    // [baseRef] ("Fork Worktree"): ramifica da branch de outro fork, mas a
+    // pasta nasce sempre no repo de origem.
+    final res = await _worktreeMgr.add(
+      rootPath ?? root.path,
+      name,
+      baseRef: baseRef,
+    );
     switch (res) {
       case Failure(:final error):
         return Failure<Project, WorktreeOpError>(error);
       case Success(:final value):
-        // Clona a estrutura (panes/abas/posições) do pai pra o fork: mesma
-        // organização, pasta nova, sessões do zero (ver _cloneLayoutForWorktree).
-        final clonedLayout = _cloneLayoutForWorktree(rootId);
+        // Clona a estrutura (panes/abas/posições) pro fork: do pai por padrão,
+        // ou do fork de origem no "Fork Worktree" (mesma organização, pasta
+        // nova, sessões do zero — ver _cloneLayoutForWorktree).
+        final clonedLayout = _cloneLayoutForWorktree(layoutSourceId ?? rootId);
         await _refreshWorktrees(rootId); // insere o fork em _projectList
         final fork = _projectById(value.path);
         if (fork == null) {
@@ -1338,10 +1423,63 @@ class CockpitViewModel extends ChangeNotifier {
 
   /// Branches locais + worktrees de [rootId], pra validação ao vivo do dialog
   /// de criar (decisão 11).
-  Future<WorktreeNamespace> worktreeNamespace(String rootId) async {
+  /// "Fork Worktree": cria uma worktree nova ramificada da **branch do fork**
+  /// [forkId], materializada no repo de origem (nunca aninhada). O fork novo
+  /// entra como irmão na lista (mesmo pai), herdando o layout do fork base.
+  Future<Result<Project, WorktreeOpError>> forkWorktree(
+    String forkId,
+    String name,
+  ) async {
+    final fork = _projectById(forkId);
+    if (fork == null || fork.parentId == null) {
+      return const Failure(WorktreeOpError('Worktree not found.'));
+    }
+    final origin = _forkOriginPath(fork);
+    if (origin == null) {
+      return const Failure(WorktreeOpError('Origin root not found.'));
+    }
+    return createWorktree(
+      fork.parentId!,
+      name,
+      rootPath: origin,
+      baseRef: fork.name,
+      layoutSourceId: forkId,
+    );
+  }
+
+  /// Namespace pra validação do "Fork Worktree" — o do repo de origem do fork.
+  Future<WorktreeNamespace> forkWorktreeNamespace(String forkId) async {
+    final fork = _projectById(forkId);
+    final origin = fork == null ? null : _forkOriginPath(fork);
+    if (origin == null) return const WorktreeNamespace.empty();
+    return _worktreeMgr.namespace(origin);
+  }
+
+  Future<WorktreeNamespace> worktreeNamespace(
+    String rootId, {
+    String? rootPath,
+  }) async {
     final root = _projectById(rootId);
     if (root == null) return const WorktreeNamespace.empty();
-    return _worktreeMgr.namespace(root.path);
+    return _worktreeMgr.namespace(rootPath ?? root.path);
+  }
+
+  /// Root que originou o fork — as ops de worktree rodam contra ela. Fallback:
+  /// o path do pai (single-root, comportamento histórico).
+  String? _forkOriginPath(Project fork) {
+    final parent = fork.parentId == null ? null : _projectById(fork.parentId);
+    return _forkOrigin[fork.id] ?? parent?.path;
+  }
+
+  /// Basename da root que originou o fork, **só em pai multi-root** — a rail
+  /// usa como sufixo (`test (backend)`) pra desambiguar forks de roots
+  /// diferentes. Single-root devolve `null` (sufixo seria redundante).
+  String? forkOriginName(String forkId) {
+    final fork = _projectById(forkId);
+    if (fork == null || fork.parentId == null) return null;
+    if (!isMultiRoot(fork.parentId!)) return null;
+    final origin = _forkOrigin[forkId];
+    return origin?.split('/').last;
   }
 
   /// Remove o fork [forkId] (decisão 6): `git worktree remove` + `git branch -D`
@@ -1354,11 +1492,11 @@ class CockpitViewModel extends ChangeNotifier {
     if (fork == null || fork.parentId == null) {
       return const Failure(WorktreeOpError('Worktree not found.'));
     }
-    final root = _projectById(fork.parentId);
-    if (root == null) {
+    final origin = _forkOriginPath(fork);
+    if (origin == null) {
       return const Failure(WorktreeOpError('Parent workspace not found.'));
     }
-    final res = await _worktreeMgr.remove(root.path, fork.path, fork.name);
+    final res = await _worktreeMgr.remove(origin, fork.path, fork.name);
     if (res.isSuccess) {
       // O fork sai do `git worktree list` → a reconciliação detecta o someço e
       // dispara kill+close+volta-pro-pai (não duplicamos a rotina).
@@ -1372,9 +1510,77 @@ class CockpitViewModel extends ChangeNotifier {
   Future<bool> isWorktreeBranchMerged(String forkId) async {
     final fork = _projectById(forkId);
     if (fork == null || fork.parentId == null) return false;
-    final root = _projectById(fork.parentId);
-    if (root == null) return false;
-    return _worktreeMgr.isBranchMerged(root.path, fork.name);
+    final origin = _forkOriginPath(fork);
+    if (origin == null) return false;
+    return _worktreeMgr.isBranchMerged(origin, fork.name);
+  }
+
+  /// Unstage (Source Control): `git restore --staged -- <arquivo>` na root
+  /// dona do caminho. `null` = sucesso; senão a saída de erro do git.
+  Future<String?> unstageFile(String absPath) =>
+      _restoreFile(absPath, staged: true);
+
+  /// Discard (Source Control): joga fora a mudança do working tree —
+  /// `git restore -- <arquivo>`; untracked não tem "restore", então vai pra
+  /// lixeira via [deletePath] (reversível no macOS). `null` = sucesso.
+  Future<String?> discardFile(String absPath) async {
+    if (gitStatusForPath(absPath) == GitFileStatus.untracked) {
+      final res = await deletePath(absPath);
+      return res.fold((_) => null, (e) => e);
+    }
+    return _restoreFile(absPath, staged: false);
+  }
+
+  /// Commit (Source Control): comita **só** [absPath] com [message], na root
+  /// dona do caminho. Untracked precisa de `git add` antes (pathspec de commit
+  /// não casa com arquivo não-rastreado); nos demais o
+  /// `git commit -m <msg> -- <arquivo>` já auto-stageia a mudança do working
+  /// tree. `null` = sucesso; senão a saída de erro do git.
+  Future<String?> commitFile(String absPath, String message) async {
+    final pid = _selectedProjectId;
+    if (pid == null) return 'No workspace selected.';
+    final root = rootContaining(pid, absPath);
+    if (root == null) return 'File is outside the workspace roots.';
+    final rel = _subOf(absPath, root);
+    if (gitStatusForPath(absPath) == GitFileStatus.untracked) {
+      final err = await _collectGit(root, ['add', '--', rel]);
+      if (err != null) return err;
+    }
+    final err = await _collectGit(root, ['commit', '-m', message, '--', rel]);
+    unawaited(_refreshGit(pid));
+    return err;
+  }
+
+  /// Roda um git rápido e devolve `null` (exit 0) ou a saída como erro.
+  Future<String?> _collectGit(String root, List<String> args) async {
+    final run = _gitRunner.run(root, args);
+    final lines = <String>[];
+    final sub = run.output.listen(lines.add);
+    final code = await run.exitCode;
+    await sub.cancel();
+    return code == 0 ? null : lines.join('\n');
+  }
+
+  Future<String?> _restoreFile(String absPath, {required bool staged}) async {
+    final pid = _selectedProjectId;
+    if (pid == null) return 'No workspace selected.';
+    final root = rootContaining(pid, absPath);
+    if (root == null) return 'File is outside the workspace roots.';
+    final rel = _subOf(absPath, root);
+    final run = _gitRunner.run(root, [
+      'restore',
+      if (staged) '--staged',
+      '--',
+      rel,
+    ]);
+    final lines = <String>[];
+    final sub = run.output.listen(lines.add);
+    final code = await run.exitCode;
+    await sub.cancel();
+    unawaited(_refreshGit(pid));
+    _fileTreeRevision++; // conteúdo em disco pode ter mudado (restore)
+    notifyListeners();
+    return code == 0 ? null : lines.join('\n');
   }
 
   // === Git commands (Sync / Pull / Push) — feature "more git" ===
@@ -1388,6 +1594,22 @@ class CockpitViewModel extends ChangeNotifier {
   /// `git push` no repo em [repoPath].
   GitRun gitPush(String repoPath) => _gitRunner.run(repoPath, const ['push']);
 
+  /// "Update from parent": mergeia a branch **do pai** (root de origem) no
+  /// checkout do worktree [fork] — o inverso do [mergeWorktreeToParent].
+  /// Conflito fica no worktree pro usuário resolver (exit ≠ 0 no dialog);
+  /// o pai nunca é tocado.
+  GitRun updateWorktreeFromParent(Project fork) {
+    final origin = _forkOriginPath(fork);
+    final parentBranch = origin == null ? null : _gitInfo[origin]?.branch;
+    if (parentBranch == null) {
+      final controller = StreamController<String>()
+        ..add('Parent branch not found.');
+      unawaited(controller.close());
+      return GitRun(output: controller.stream, exitCode: Future.value(1));
+    }
+    return _gitRunner.run(fork.path, ['merge', parentBranch]);
+  }
+
   /// Mergeia a branch do worktree [fork] no checkout do workspace pai. Em
   /// sucesso, remove o worktree (reusa [removeWorktree] → kill+close) e seleciona
   /// o pai. Devolve o handle ao vivo pro dialog de processo.
@@ -1396,8 +1618,10 @@ class CockpitViewModel extends ChangeNotifier {
     if (parentId == null) return _mergeError('Not a worktree.');
     final root = _projectById(parentId);
     if (root == null) return _mergeError('Parent workspace not found.');
+    final origin = _forkOriginPath(fork);
+    if (origin == null) return _mergeError('Origin root not found.');
 
-    final outcome = _gitRunner.mergeIntoParent(root.path, fork.path, fork.name);
+    final outcome = _gitRunner.mergeIntoParent(origin, fork.path, fork.name);
     // Ao terminar com sucesso, limpa o worktree e volta pro pai. A remoção passa
     // pela reconciliação de [removeWorktree] (mata processos, fecha panes).
     outcome.status.then((status) async {
@@ -2801,21 +3025,71 @@ class CockpitViewModel extends ChangeNotifier {
 
   /// (Re)lê o estado git de um projeto e atualiza a rail. Chamado no boot (todos),
   /// ao selecionar e no fim de turno do agente (que pode ter mexido em arquivos).
+  /// Reavalia as **roots** (implícitas, do filesystem) e lê o git de cada uma —
+  /// single-root é o caso N=1 e se comporta como sempre.
   Future<void> _refreshGit(String projectId) async {
     final project = _projectById(projectId);
     // Sink único de git — barra o Cockpit (sem pasta) de uma vez: cobre o
     // watcher, o poll e o refresh manual/fim-de-turno.
     if (project == null || project.isSystemTerminal) return;
-    final info = await _gitReader.read(project.path);
-    // Evita rebuild se nada mudou (branch + ahead/behind + mapa de arquivos).
-    final old = _gitInfo[projectId];
-    if (old == info) {
-      _gitInfo[projectId] = info; // garante a chave mesmo sem mudança visível
-      return;
+
+    final roots = _deriveRoots(project.path);
+    final oldRoots = _rootsByProject[projectId];
+    final rootsChanged = !listEquals(oldRoots, roots);
+    if (rootsChanged) {
+      // Roots que sumiram (repo removido / .git criado na mãe) → limpa estado.
+      for (final gone
+          in (oldRoots ?? const <String>[]).where((r) => !roots.contains(r))) {
+        _gitInfo.remove(gone);
+        _gitTree.remove(gone);
+      }
+      _rootsByProject[projectId] = roots;
     }
-    _gitInfo[projectId] = info;
-    _gitTree[projectId] = _buildGitTree(info?.files);
-    notifyListeners();
+
+    var changed = rootsChanged;
+    for (final root in roots) {
+      final info = await _gitReader.read(root);
+      // Evita rebuild se nada mudou (branch + ahead/behind + mapa de arquivos).
+      final old = _gitInfo[root];
+      if (old == info) {
+        _gitInfo[root] = info; // garante a chave mesmo sem mudança visível
+        continue;
+      }
+      _gitInfo[root] = info;
+      _gitTree[root] = _buildGitTree(info?.files);
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Deriva as roots git de uma pasta (síncrono, raso — só `existsSync`):
+  /// - `path/.git` existe (dir **ou arquivo** — worktrees usam arquivo) →
+  ///   `[path]` (single-root; monorepo é isso, N=1).
+  /// - senão, filhas imediatas com `.git` → multi-root (assinatura de multirepo).
+  /// - nenhuma → `[path]` (pasta comum, sem git — comportamento atual).
+  static List<String> _deriveRoots(String path) {
+    if (path.isEmpty) return const [];
+    if (FileSystemEntity.typeSync('$path/.git') !=
+        FileSystemEntityType.notFound) {
+      return [path];
+    }
+    final roots = <String>[];
+    try {
+      for (final entry in Directory(path).listSync(followLinks: false)) {
+        if (entry is! Directory) continue;
+        final name = entry.path.split(Platform.pathSeparator).last;
+        if (name.startsWith('.')) continue;
+        if (FileSystemEntity.typeSync('${entry.path}/.git') !=
+            FileSystemEntityType.notFound) {
+          roots.add(entry.path.replaceAll('\\', '/'));
+        }
+      }
+    } catch (_) {
+      return [path]; // pasta ilegível → trata como comum
+    }
+    if (roots.isEmpty) return [path];
+    roots.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return roots;
   }
 
   /// Expande o mapa path→status (só arquivos) num índice que também cobre as
@@ -2925,19 +3199,27 @@ class CockpitViewModel extends ChangeNotifier {
     final root = _projectById(rootId);
     if (root == null || root.parentId != null || root.isSystemTerminal) return;
 
-    final wts = await _worktreeMgr.list(root.path);
-    final forks = <Project>[
-      for (final Worktree w in wts)
-        Project(
-          id: w.path, // o caminho é o id estável do fork
-          name: w.branch,
-          path: w.path,
-          colorValue: root.colorValue,
-          createdAt: root.createdAt,
-          parentId: rootId,
-          order: root.order, // aninha junto do pai
-        ),
-    ];
+    // Multi-root: worktrees são **por root** — varre cada repo filho e anota a
+    // origem (as ops de remove/merge/namespace rodam contra ela). Single-root
+    // é o caso N=1: uma passada, comportamento histórico.
+    final forks = <Project>[];
+    for (final rootPath in rootsOf(rootId)) {
+      final wts = await _worktreeMgr.list(rootPath);
+      for (final Worktree w in wts) {
+        _forkOrigin[w.path] = rootPath;
+        forks.add(
+          Project(
+            id: w.path, // o caminho é o id estável do fork
+            name: w.branch,
+            path: w.path,
+            colorValue: root.colorValue,
+            createdAt: root.createdAt,
+            parentId: rootId,
+            order: root.order, // aninha junto do pai
+          ),
+        );
+      }
+    }
 
     final old = _worktrees[rootId] ?? const <Project>[];
     final oldSig = old.map((f) => '${f.id}|${f.name}').toList();
@@ -2949,6 +3231,7 @@ class CockpitViewModel extends ChangeNotifier {
     var switched = false;
     for (final gone in old.where((f) => !newIds.contains(f.id))) {
       _disposeProjectRuntime(gone.id);
+      _forkOrigin.remove(gone.id);
       _projectList.removeWhere((p) => p.id == gone.id);
       if (_selectedProjectId == gone.id) {
         _selectedProjectId = rootId; // pai assume

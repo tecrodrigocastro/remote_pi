@@ -8,7 +8,12 @@ import 'package:cockpit/app/cockpit/ui/widgets/workspace_avatar.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:cockpit/app/core/ui/widgets/app_tooltip.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
+
+/// Root git de um workspace, pro kebab da rail: path absoluto + basename +
+/// branch (`null` = pasta sem git). Multi-root tem 2+; single-root, 1.
+typedef RailRoot = ({String path, String name, String? branch});
 
 /// Rail esquerda (~252px): cabeçalho "Sessions", lista de projetos (avatar +
 /// nome + git + contador de notificações), rodapé com a máquina.
@@ -20,6 +25,9 @@ class ProjectsRail extends StatefulWidget {
     required this.selectedId,
     required this.notificationCount,
     required this.gitInfo,
+    required this.rootsSummary,
+    required this.rootsOf,
+    required this.forkOriginName,
     required this.onSelect,
     required this.onAdd,
     required this.onConfigure,
@@ -27,6 +35,8 @@ class ProjectsRail extends StatefulWidget {
     required this.onCreateWorktree,
     required this.onRemoveWorktree,
     required this.onMergeWorktree,
+    required this.onUpdateWorktree,
+    required this.onForkWorktree,
     required this.onSync,
     required this.onPull,
     required this.onPush,
@@ -56,13 +66,27 @@ class ProjectsRail extends StatefulWidget {
   final String? selectedId;
   final int Function(String projectId) notificationCount;
   final GitInfo? Function(String projectId) gitInfo;
+
+  /// Agregado multi-root: (nº de roots, roots sujas). Só é lido quando
+  /// [gitInfo] devolve `null` e o workspace tem 2+ roots (multirepo).
+  final (int, int) Function(String projectId) rootsSummary;
+
+  /// Roots git do workspace (path, basename, branch|null) — alimenta os
+  /// **submenus** das ações git do kebab em multi-root. Single-root: 1 item.
+  final List<RailRoot> Function(String projectId) rootsOf;
+
+  /// Basename da root que originou um fork (só em pai multi-root; senão
+  /// `null`) — vira o sufixo `(backend)` no item da worktree.
+  final String? Function(String forkId) forkOriginName;
   final ValueChanged<String> onSelect;
   final Future<bool> Function() onAdd;
   final ValueChanged<Project> onConfigure;
   final ValueChanged<Project> onDelete;
 
   /// Abre o fluxo de criar worktree para um workspace (só raízes com git).
-  final ValueChanged<Project> onCreateWorktree;
+  /// Abre o fluxo de criar worktree em [rootPath] (multi-root: a root escolhida
+  /// no submenu; single-root: a própria raiz).
+  final void Function(Project project, String rootPath) onCreateWorktree;
 
   /// Abre o fluxo de remover uma worktree (fork). A confirmação fica na page.
   final ValueChanged<Project> onRemoveWorktree;
@@ -70,10 +94,17 @@ class ProjectsRail extends StatefulWidget {
   /// Mergeia a branch do worktree (fork) no workspace pai.
   final ValueChanged<Project> onMergeWorktree;
 
-  /// Ações git no workspace raiz (só repos git).
-  final ValueChanged<Project> onSync;
-  final ValueChanged<Project> onPull;
-  final ValueChanged<Project> onPush;
+  /// "Update from Parent": mergeia a branch do pai no worktree (fork).
+  final ValueChanged<Project> onUpdateWorktree;
+
+  /// "Fork Worktree": nova worktree ramificada da branch deste fork.
+  final ValueChanged<Project> onForkWorktree;
+
+  /// Ações git no workspace, direcionadas a [rootPath] (multi-root: escolhida
+  /// no submenu do kebab; single-root: a própria raiz, sem perguntar).
+  final void Function(Project project, String rootPath) onSync;
+  final void Function(Project project, String rootPath) onPull;
+  final void Function(Project project, String rootPath) onPush;
 
   /// Abre a tela de Configurações (engrenagem no rodapé).
   final VoidCallback onOpenSettings;
@@ -102,6 +133,7 @@ class _ProjectsRailState extends State<ProjectsRail> {
       for (var i = 0; i < forks.length; i++)
         _WorktreeItem(
           worktree: forks[i],
+          originName: widget.forkOriginName(forks[i].id),
           isLast: i == forks.length - 1,
           selected: forks[i].id == widget.selectedId,
           notifications: widget.notificationCount(forks[i].id),
@@ -109,6 +141,8 @@ class _ProjectsRailState extends State<ProjectsRail> {
           onTap: () => widget.onSelect(forks[i].id),
           onRemove: () => widget.onRemoveWorktree(forks[i]),
           onMerge: () => widget.onMergeWorktree(forks[i]),
+          onUpdate: () => widget.onUpdateWorktree(forks[i]),
+          onFork: () => widget.onForkWorktree(forks[i]),
         ),
     ];
   }
@@ -186,17 +220,22 @@ class _ProjectsRailState extends State<ProjectsRail> {
                                   project.id,
                                 ),
                                 git: widget.gitInfo(project.id),
-                                // "Criar worktree" só faz sentido em repo git.
+                                rootsSummary: widget.rootsSummary(project.id),
+                                // "Criar worktree" só faz sentido em repo git
+                                // (single ou multi-root — na multi a page pede
+                                // a root alvo antes).
                                 canCreateWorktree:
-                                    widget.gitInfo(project.id) != null,
+                                    widget.gitInfo(project.id) != null ||
+                                    widget.rootsSummary(project.id).$1 > 1,
                                 onTap: () => widget.onSelect(project.id),
                                 onConfigure: () => widget.onConfigure(project),
                                 onDelete: () => widget.onDelete(project),
-                                onCreateWorktree: () =>
-                                    widget.onCreateWorktree(project),
-                                onSync: () => widget.onSync(project),
-                                onPull: () => widget.onPull(project),
-                                onPush: () => widget.onPush(project),
+                                roots: widget.rootsOf(project.id),
+                                onCreateWorktree: (r) =>
+                                    widget.onCreateWorktree(project, r),
+                                onSync: (r) => widget.onSync(project, r),
+                                onPull: (r) => widget.onPull(project, r),
+                                onPush: (r) => widget.onPush(project, r),
                               ),
                             ),
                             // Worktrees (forks) penduradas abaixo do workspace,
@@ -303,6 +342,8 @@ class _ProjectItem extends StatelessWidget {
     required this.selected,
     required this.notifications,
     required this.git,
+    required this.rootsSummary,
+    required this.roots,
     required this.canCreateWorktree,
     required this.onTap,
     required this.onConfigure,
@@ -317,14 +358,21 @@ class _ProjectItem extends StatelessWidget {
   final bool selected;
   final int notifications;
   final GitInfo? git;
+
+  /// Agregado multi-root (nº de roots, roots sujas) — usado no lugar do
+  /// [_GitBadge] quando [git] é `null` e há 2+ roots.
+  final (int, int) rootsSummary;
+
+  /// Roots do workspace (submenu das ações git em multi-root).
+  final List<RailRoot> roots;
   final bool canCreateWorktree;
   final VoidCallback onTap;
   final VoidCallback onConfigure;
   final VoidCallback onDelete;
-  final VoidCallback onCreateWorktree;
-  final VoidCallback onSync;
-  final VoidCallback onPull;
-  final VoidCallback onPush;
+  final void Function(String rootPath) onCreateWorktree;
+  final void Function(String rootPath) onSync;
+  final void Function(String rootPath) onPull;
+  final void Function(String rootPath) onPush;
 
   @override
   Widget build(BuildContext context) {
@@ -361,10 +409,17 @@ class _ProjectItem extends StatelessWidget {
                       fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
                     ),
                   ),
-                  // Linha do git — só quando é repo git (senão, só o título).
+                  // Linha do git — repo git (branch) ou multi-root (agregado);
+                  // pasta comum não mostra nada.
                   if (gitInfo != null) ...[
                     const SizedBox(height: 4),
                     _GitBadge(info: gitInfo),
+                  ] else if (rootsSummary.$1 > 1) ...[
+                    const SizedBox(height: 4),
+                    _MultiRootBadge(
+                      roots: rootsSummary.$1,
+                      dirtyRoots: rootsSummary.$2,
+                    ),
                   ],
                 ],
               ),
@@ -393,6 +448,7 @@ class _ProjectItem extends StatelessWidget {
             _MenuButton(
               workspaceId: project.id,
               canCreateWorktree: canCreateWorktree,
+              roots: roots,
               onConfigure: onConfigure,
               onDelete: onDelete,
               onCreateWorktree: onCreateWorktree,
@@ -415,6 +471,7 @@ class _ProjectItem extends StatelessWidget {
 class _WorktreeItem extends StatelessWidget {
   const _WorktreeItem({
     required this.worktree,
+    required this.originName,
     required this.isLast,
     required this.selected,
     required this.notifications,
@@ -422,9 +479,15 @@ class _WorktreeItem extends StatelessWidget {
     required this.onTap,
     required this.onRemove,
     required this.onMerge,
+    required this.onUpdate,
+    required this.onFork,
   });
 
   final Project worktree;
+
+  /// Basename da root de origem (só em pai multi-root) → sufixo `(backend)`
+  /// pra desambiguar forks de roots diferentes com a mesma branch.
+  final String? originName;
 
   /// `true` quando é a última worktree do pai → a linha vira "└" (vertical para
   /// no tick); nos do meio a vertical segue até o fim pra emendar com a próxima.
@@ -435,6 +498,8 @@ class _WorktreeItem extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onRemove;
   final VoidCallback onMerge;
+  final VoidCallback onUpdate;
+  final VoidCallback onFork;
 
   @override
   Widget build(BuildContext context) {
@@ -464,8 +529,22 @@ class _WorktreeItem extends StatelessWidget {
                     Icon(Icons.call_split, size: 12, color: colors.text3),
                     const SizedBox(width: 7),
                     Expanded(
-                      child: Text(
-                        worktree.name,
+                      child: Text.rich(
+                        TextSpan(
+                          text: worktree.name,
+                          children: [
+                            // Sufixo `(root)` só em pai multi-root: diz de
+                            // qual repo o fork nasceu (branch pode repetir).
+                            if (originName != null)
+                              TextSpan(
+                                text: '  ($originName)',
+                                style: context.typo.mono.copyWith(
+                                  fontSize: 11,
+                                  color: colors.text3,
+                                ),
+                              ),
+                          ],
+                        ),
                         overflow: TextOverflow.ellipsis,
                         style: context.typo.mono.copyWith(
                           fontSize: 12,
@@ -486,6 +565,8 @@ class _WorktreeItem extends StatelessWidget {
                       branch: worktree.name,
                       onRemove: onRemove,
                       onMerge: onMerge,
+                      onUpdate: onUpdate,
+                      onFork: onFork,
                     ),
                   ],
                 ),
@@ -504,11 +585,15 @@ class _ForkMenuButton extends StatelessWidget {
     required this.branch,
     required this.onRemove,
     required this.onMerge,
+    required this.onUpdate,
+    required this.onFork,
   });
 
   final String branch;
   final VoidCallback onRemove;
   final VoidCallback onMerge;
+  final VoidCallback onUpdate;
+  final VoidCallback onFork;
 
   Future<void> _show(BuildContext context) async {
     final pick = await showAppMenu<String>(
@@ -518,6 +603,20 @@ class _ForkMenuButton extends StatelessWidget {
           value: 'merge',
           label: 'Merge to Parent',
           icon: Icons.merge_type,
+        ),
+        // Inverso do Merge to Parent: traz a branch do pai pro worktree
+        // ("Update branch" do GitHub). Conflito fica no worktree.
+        AppMenuItem(
+          value: 'update',
+          label: 'Update from Parent',
+          icon: Icons.download_outlined,
+        ),
+        // Nova worktree ramificada da branch DESTE fork (não do HEAD do
+        // pai) — vira irmão na lista, herdando o layout deste fork.
+        AppMenuItem(
+          value: 'fork',
+          label: 'Fork Worktree',
+          icon: Icons.call_split,
         ),
         AppMenuItem(
           value: 'copy',
@@ -533,6 +632,8 @@ class _ForkMenuButton extends StatelessWidget {
       ],
     );
     if (pick == 'merge') onMerge();
+    if (pick == 'update') onUpdate();
+    if (pick == 'fork') onFork();
     if (pick == 'copy') {
       await Clipboard.setData(ClipboardData(text: branch));
     }
@@ -541,18 +642,15 @@ class _ForkMenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      tooltip: (context) => const TooltipContainer(child: Text('Options')),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: (_) => _show(context),
-          child: SizedBox(
-            width: 22,
-            height: 22,
-            child: Icon(Icons.more_vert, size: 14, color: context.colors.text3),
-          ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (_) => _show(context),
+        child: SizedBox(
+          width: 22,
+          height: 22,
+          child: Icon(Icons.more_vert, size: 14, color: context.colors.text3),
         ),
       ),
     );
@@ -659,6 +757,46 @@ class _ForkLinePainter extends CustomPainter {
 
 /// Pílula de git: ícone de branch + nome do branch + nº de arquivos sujos.
 /// Sujo → âmbar com contador; limpo → cinza, sem número.
+/// Chip agregado de um workspace **multi-root** (multirepo): nº de roots +
+/// quantas estão sujas. As branches individuais moram na árvore de arquivos —
+/// aqui só "esse projeto tem coisa pendente?". Mesma linguagem do [_GitBadge].
+class _MultiRootBadge extends StatelessWidget {
+  const _MultiRootBadge({required this.roots, required this.dirtyRoots});
+  final int roots;
+  final int dirtyRoots;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+    final dirty = dirtyRoots > 0;
+    final fg = dirty ? colors.warn : colors.text3;
+    final bg = dirty ? colors.editedBg : colors.panel3;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 1, 5, 1),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.account_tree_outlined, size: 9, color: fg),
+          const SizedBox(width: 3),
+          Text(
+            dirty ? '$roots roots · $dirtyRoots' : '$roots roots',
+            style: typo.mono.copyWith(
+              fontSize: 9.5,
+              color: fg,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GitBadge extends StatelessWidget {
   const _GitBadge({required this.info});
   final GitInfo info;
@@ -751,6 +889,7 @@ class _MenuButton extends StatelessWidget {
   const _MenuButton({
     required this.workspaceId,
     required this.canCreateWorktree,
+    required this.roots,
     required this.onConfigure,
     required this.onDelete,
     required this.onCreateWorktree,
@@ -763,30 +902,51 @@ class _MenuButton extends StatelessWidget {
   /// (`--workspace-id` / filtros de `list-panes`).
   final String workspaceId;
   final bool canCreateWorktree;
+
+  /// Roots git do workspace. 2+ → as ações git viram **submenu** (escolhe a
+  /// root ali mesmo); 1 → executam direto nela (comportamento histórico).
+  final List<RailRoot> roots;
   final VoidCallback onConfigure;
   final VoidCallback onDelete;
-  final VoidCallback onCreateWorktree;
-  final VoidCallback onSync;
-  final VoidCallback onPull;
-  final VoidCallback onPush;
+  final void Function(String rootPath) onCreateWorktree;
+  final void Function(String rootPath) onSync;
+  final void Function(String rootPath) onPull;
+  final void Function(String rootPath) onPush;
+
+  /// Item de ação git: single-root executa direto (`<ação>|<root>`); multi-root
+  /// abre submenu com uma entrada por root (roots sem git desabilitadas).
+  AppMenuItem<String> _gitItem(String action, String label, IconData icon) {
+    final gitRoots = roots.where((r) => r.branch != null).toList();
+    if (roots.length <= 1) {
+      final path = roots.isEmpty ? '' : roots.first.path;
+      return AppMenuItem(value: '$action|$path', label: label, icon: icon);
+    }
+    return AppMenuItem(
+      value: action, // nunca devolvido — só os filhos
+      label: label,
+      icon: icon,
+      children: [
+        for (final r in gitRoots)
+          AppMenuItem(
+            value: '$action|${r.path}',
+            label: '${r.name}  ⎇ ${r.branch}',
+            icon: Icons.folder_outlined,
+          ),
+      ],
+    );
+  }
 
   Future<void> _show(BuildContext context) async {
     final pick = await showAppMenu<String>(
       context,
       items: [
-        // Ações de sincronização só em repo git.
-        if (canCreateWorktree) ...const [
-          AppMenuItem(value: 'sync', label: 'Sync', icon: Icons.sync),
-          AppMenuItem(value: 'pull', label: 'Pull', icon: Icons.arrow_downward),
-          AppMenuItem(value: 'push', label: 'Push', icon: Icons.arrow_upward),
+        // Ações de sincronização só quando há git (single ou multi-root).
+        if (canCreateWorktree) ...[
+          _gitItem('sync', 'Sync', Icons.sync),
+          _gitItem('pull', 'Pull', Icons.arrow_downward),
+          _gitItem('push', 'Push', Icons.arrow_upward),
+          _gitItem('worktree', 'Create worktree', Icons.call_split),
         ],
-        // "Criar worktree" só aparece quando o workspace é um repo git.
-        if (canCreateWorktree)
-          const AppMenuItem(
-            value: 'worktree',
-            label: 'Create worktree',
-            icon: Icons.call_split,
-          ),
         const AppMenuItem(
           value: 'copy-id',
           label: 'Copy workspace id',
@@ -805,10 +965,18 @@ class _MenuButton extends StatelessWidget {
         ),
       ],
     );
-    if (pick == 'sync') onSync();
-    if (pick == 'pull') onPull();
-    if (pick == 'push') onPush();
-    if (pick == 'worktree') onCreateWorktree();
+    if (pick == null) return;
+    final sep = pick.indexOf('|');
+    if (sep > 0) {
+      final action = pick.substring(0, sep);
+      final rootPath = pick.substring(sep + 1);
+      if (rootPath.isEmpty) return;
+      if (action == 'sync') onSync(rootPath);
+      if (action == 'pull') onPull(rootPath);
+      if (action == 'push') onPush(rootPath);
+      if (action == 'worktree') onCreateWorktree(rootPath);
+      return;
+    }
     if (pick == 'copy-id') {
       await Clipboard.setData(ClipboardData(text: workspaceId));
     }
@@ -818,18 +986,15 @@ class _MenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      tooltip: (context) => const TooltipContainer(child: Text('Options')),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapUp: (_) => _show(context),
-          child: SizedBox(
-            width: 26,
-            height: 26,
-            child: Icon(Icons.more_vert, size: 16, color: context.colors.text3),
-          ),
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (_) => _show(context),
+        child: SizedBox(
+          width: 26,
+          height: 26,
+          child: Icon(Icons.more_vert, size: 16, color: context.colors.text3),
         ),
       ),
     );
@@ -869,8 +1034,8 @@ class _SmallIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Tooltip(
-      tooltip: (context) => TooltipContainer(child: Text(tooltip)),
+    return AppTooltip(
+      message: tooltip,
       child: HoverTap(
         borderRadius: BorderRadius.circular(5),
         onTap: onTap,
