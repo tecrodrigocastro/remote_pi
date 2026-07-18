@@ -879,6 +879,8 @@ class _CockpitPageState extends State<CockpitPage> {
                             onSelectFile:
                                 vm.selectFileInTree, // atualiza highlight
                             onClearSelection: vm.clearFileSelection,
+                            revealPath: vm.treeRevealPath,
+                            revealGen: vm.treeRevealGen,
                             onOpenDiff: (path) =>
                                 vm.openDiff(path, isPreview: false),
                             onTapDiff: vm.openDiff, // clique único = preview

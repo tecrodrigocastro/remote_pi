@@ -71,7 +71,15 @@ class FileTreePanel extends StatefulWidget {
     this.onUnstageFile,
     this.onDiscardFile,
     this.onCommitFile,
+    this.revealPath,
+    this.revealGen = 0,
   });
+
+  /// "Revelar na árvore": arquivo-alvo + geração. Quando [revealGen] muda, a
+  /// árvore expande a root e os folders ancestrais de [revealPath] (uma vez) e
+  /// destaca o arquivo. Disparado ao selecionar uma tab de FileView.
+  final String? revealPath;
+  final int revealGen;
 
   /// Source Control: comita só o arquivo, com a mensagem do dialog.
   /// `null` = sucesso; senão a mensagem de erro do git.
@@ -198,6 +206,27 @@ class _FileTreePanelState extends State<FileTreePanel> {
   /// arquivo → cria na pasta-mãe; nada selecionado → cria na raiz.
   bool _selectedIsFolder = false;
 
+  /// Geração de reveal já processada + o conjunto de paths de folders ancestrais
+  /// do alvo a expandir (`_Folder` consome uma vez, via a geração).
+  int _revealGen = 0;
+  Set<String> _revealExpand = const <String>{};
+
+  /// Paths dos diretórios ancestrais de [filePath] (sem o próprio arquivo),
+  /// preservando o prefixo absoluto. Ex.: `/a/b/c.txt` → `{/a, /a/b}`. Cada
+  /// prefixo que termina num `/` é um ancestral. Usado pra saber quais folders
+  /// expandir no reveal.
+  Set<String> _ancestorDirs(String? filePath) {
+    if (filePath == null || filePath.isEmpty) return const <String>{};
+    final lastSlash = filePath.lastIndexOf('/');
+    if (lastSlash <= 0) return const <String>{}; // arquivo direto na raiz
+    final out = <String>{};
+    for (var i = 1; i < lastSlash; i++) {
+      if (filePath[i] == '/') out.add(filePath.substring(0, i));
+    }
+    out.add(filePath.substring(0, lastSlash)); // a pasta-mãe imediata
+    return out;
+  }
+
   /// Aba ativa do painel: árvore de arquivos, busca ou source control.
   _RightPaneTab _tab = _RightPaneTab.files;
 
@@ -228,6 +257,23 @@ class _FileTreePanelState extends State<FileTreePanel> {
     if (oldWidget.searchFocusSignal != widget.searchFocusSignal) {
       oldWidget.searchFocusSignal?.removeListener(_onSearchFocusRequested);
       widget.searchFocusSignal?.addListener(_onSearchFocusRequested);
+    }
+    // Novo pedido de reveal (seleção de tab FileView): calcula os ancestrais do
+    // alvo, expande a root que o contém (multi-root) e publica o set pros folders.
+    if (widget.revealGen != oldWidget.revealGen &&
+        widget.revealGen != _revealGen) {
+      final path = widget.revealPath;
+      _revealGen = widget.revealGen;
+      _revealExpand = _ancestorDirs(path);
+      if (path != null) {
+        for (final r in widget.roots) {
+          if (path == r.path || path.startsWith('${r.path}/')) {
+            _collapsedRoots.remove(r.path);
+            break;
+          }
+        }
+      }
+      setState(() {});
     }
   }
 
@@ -537,6 +583,8 @@ class _FileTreePanelState extends State<FileTreePanel> {
       pending: _pending,
       renaming: _renaming,
       selectedPath: effectiveSelected,
+      revealExpand: _revealExpand,
+      revealGen: _revealGen,
       onSelect: _select,
       onOpenFile: widget.onOpenFile,
       onTapFile: widget.onTapFile,
@@ -889,6 +937,8 @@ class _TreeEdit {
     required this.pending,
     required this.renaming,
     required this.selectedPath,
+    required this.revealExpand,
+    required this.revealGen,
     required this.onSelect,
     required this.onOpenFile,
     required this.onTapFile,
@@ -911,6 +961,11 @@ class _TreeEdit {
   final _PendingCreate? pending;
   final String? renaming;
   final String? selectedPath;
+
+  /// Folders (paths) a expandir no reveal atual + a geração (consumida 1× por
+  /// [_Folder]). Ver [FileTreePanel.revealPath].
+  final Set<String> revealExpand;
+  final int revealGen;
 
   final void Function(String path, bool isFolder) onSelect;
   final ValueChanged<String> onOpenFile;
@@ -1071,6 +1126,10 @@ class _Folder extends StatefulWidget {
 class _FolderState extends State<_Folder> {
   bool _expanded = false;
 
+  /// Última geração de reveal já processada por esta pasta (one-shot: expande no
+  /// tick novo se for ancestral do alvo, depois deixa o usuário colapsar).
+  int _revealGen = -1;
+
   /// Força abrir quando há criação pendente nesta pasta ou em algo abaixo dela
   /// (pra revelar o input inline alvo).
   bool get _forceExpand {
@@ -1083,6 +1142,18 @@ class _FolderState extends State<_Folder> {
   @override
   Widget build(BuildContext context) {
     final edit = widget.edit;
+    // Reveal one-shot: numa geração nova, se esta pasta é ancestral do arquivo
+    // revelado, expande (pós-frame — não dá pra setState no build). Cascateia:
+    // ao expandir, o _DirView filho monta, seus _Folder buildam com gen novo e
+    // seguem a cadeia até o alvo. Consumido 1× por gen → colapsar depois vale.
+    if (edit.revealGen != _revealGen) {
+      _revealGen = edit.revealGen;
+      if (!_expanded && edit.revealExpand.contains(widget.node.path)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_expanded) setState(() => _expanded = true);
+        });
+      }
+    }
     final expanded = _expanded || _forceExpand;
     // Alvo de drop: soltar um caminho arrastado aqui move-o pra DENTRO da
     // pasta. Recusa a si mesma e descendentes (não dá pra mover pra dentro

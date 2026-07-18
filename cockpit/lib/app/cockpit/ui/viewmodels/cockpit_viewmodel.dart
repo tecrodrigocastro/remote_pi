@@ -213,6 +213,16 @@ class CockpitViewModel extends ChangeNotifier {
   String? _selectedFileInTree;
   String? get selectedFileInTree => _selectedFileInTree;
 
+  /// Sinal de "revelar na árvore": path-alvo + geração. Sobe quando o usuário
+  /// seleciona uma tab de FileView → a árvore destaca o arquivo e expande a root
+  /// e os folders ancestrais **uma vez** (o usuário pode colapsar depois; a
+  /// geração garante que só um tick novo re-expande). O highlight vai por
+  /// [selectedFileInTree]; estes dois guiam a expansão.
+  String? _treeRevealPath;
+  String? get treeRevealPath => _treeRevealPath;
+  int _treeRevealGen = 0;
+  int get treeRevealGen => _treeRevealGen;
+
   bool _railVisible = false;
   bool _treeVisible = false;
   bool _ready = false;
@@ -1746,6 +1756,16 @@ class CockpitViewModel extends ChangeNotifier {
     );
     _focused[_selectedProjectId!] = paneId;
     _clearFocusedNotification();
+    // Selecionar uma tab de FileView revela o arquivo na árvore: destaca +
+    // expande a root e os pais (uma vez, via a geração). Só quando o arquivo é
+    // do projeto ativo (fora dele não há árvore pra revelar).
+    final sel = _sessions[agentId];
+    if (sel is FileViewerSession &&
+        isInsideProject(sel.projectId, sel.path)) {
+      _selectedFileInTree = sel.path;
+      _treeRevealPath = sel.path;
+      _treeRevealGen++;
+    }
     notifyListeners();
   }
 
