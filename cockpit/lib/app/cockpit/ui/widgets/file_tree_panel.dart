@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:cockpit/app/cockpit/domain/entities/file_node.dart';
 import 'package:cockpit/app/cockpit/domain/entities/git_file_status.dart';
+import 'package:cockpit/app/cockpit/domain/entities/git_info.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/confirm_dialog.dart';
 import 'package:cockpit/app/core/domain/result.dart';
 import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
@@ -11,10 +12,31 @@ import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:flutter/services.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
 
+/// Root git de um workspace **multi-root** (multirepo) — alimenta o cabeçalho
+/// de seção na aba Files e no Source Control. Derivada em runtime pela VM
+/// (nunca persistida). Single-root chega como lista de 1 item e nenhum
+/// cabeçalho é desenhado (comportamento histórico, N=1).
+class WorkspaceRoot {
+  const WorkspaceRoot({required this.path, required this.name, this.git});
+
+  /// Caminho absoluto da root (o repo filho).
+  final String path;
+
+  /// Basename da root — o nome exibido no cabeçalho da seção.
+  final String name;
+
+  /// Estado git da root (`null` = não é repo / git indisponível).
+  final GitInfo? git;
+}
+
 /// Painel direito (~300px): árvore da pasta do **workspace**. Pastas começam
 /// colapsadas e expandem ao clicar (lazy-load). O header tem **+arquivo**,
 /// **+pasta** e **Refresh**; criar/renomear é **inline** (linha-input na árvore),
 /// deletar manda pra lixeira (macOS) ou pede confirmação (demais).
+///
+/// Workspace **multi-root** ([roots] com 2+ itens): cada root vira uma seção
+/// colapsável com cabeçalho próprio (nome + branch + sujeira); o Source
+/// Control agrega as mudanças de todas, seccionadas por root.
 class FileTreePanel extends StatefulWidget {
   const FileTreePanel({
     super.key,
@@ -41,7 +63,17 @@ class FileTreePanel extends StatefulWidget {
     this.searchPanel,
     this.searchFocusSignal,
     this.tasksPanel,
+    this.roots = const <WorkspaceRoot>[],
+    this.onRootContextMenu,
   });
+
+  /// Roots git do workspace (derivadas). 0–1 itens = single-root, layout de
+  /// hoje; 2+ = multi-root com seções por root.
+  final List<WorkspaceRoot> roots;
+
+  /// Botão-direito no cabeçalho de uma root (multi-root): a page abre o menu
+  /// de contexto (Sync/Pull/Push/worktree/terminal). `null` = sem menu.
+  final void Function(WorkspaceRoot root, Offset globalPosition)? onRootContextMenu;
 
   /// Notificado a cada Cmd+Shift+F → ativa a aba de busca (além de focar o
   /// campo, que o próprio [searchPanel] faz). `null` = sem projeto.
@@ -151,6 +183,9 @@ class _FileTreePanelState extends State<FileTreePanel> {
 
   /// Caminho sendo renomeado inline (`null` = nenhum).
   String? _renaming;
+
+  /// Roots colapsadas na aba Files (multi-root). Chave = path da root.
+  final Set<String> _collapsedRoots = <String>{};
 
   final FocusNode _treeFocus = FocusNode(debugLabel: 'fileTree');
 
@@ -465,6 +500,7 @@ class _FileTreePanelState extends State<FileTreePanel> {
                 : scMode
                 ? _ChangedTree(
                     rootPath: widget.rootPath,
+                    roots: widget.roots,
                     changedPaths: widget.changedPaths,
                     gitStatusOf: widget.gitStatusOf,
                     selectedPath: effectiveSelected,
@@ -491,13 +527,50 @@ class _FileTreePanelState extends State<FileTreePanel> {
                               vertical: 8,
                               horizontal: 6,
                             ),
-                            child: _DirView(
-                              path: widget.rootPath,
-                              rootPath: widget.rootPath,
-                              depth: 0,
-                              refreshToken: _refreshToken,
-                              edit: edit,
-                            ),
+                            child: widget.roots.length > 1
+                                // Multi-root: uma seção colapsável por root,
+                                // cada uma com sua própria _DirView (paths
+                                // git relativos à root, não à pasta-mãe).
+                                ? Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      for (final root in widget.roots) ...[
+                                        _RootHeader(
+                                          root: root,
+                                          collapsed: _collapsedRoots.contains(
+                                            root.path,
+                                          ),
+                                          onToggle: () => setState(() {
+                                            if (!_collapsedRoots.remove(
+                                              root.path,
+                                            )) {
+                                              _collapsedRoots.add(root.path);
+                                            }
+                                          }),
+                                          onContextMenu:
+                                              widget.onRootContextMenu,
+                                        ),
+                                        if (!_collapsedRoots.contains(
+                                          root.path,
+                                        ))
+                                          _DirView(
+                                            path: root.path,
+                                            rootPath: root.path,
+                                            depth: 1,
+                                            refreshToken: _refreshToken,
+                                            edit: edit,
+                                          ),
+                                      ],
+                                    ],
+                                  )
+                                : _DirView(
+                                    path: widget.rootPath,
+                                    rootPath: widget.rootPath,
+                                    depth: 0,
+                                    refreshToken: _refreshToken,
+                                    edit: edit,
+                                  ),
                           ),
                     ),
                   ),
@@ -505,6 +578,91 @@ class _FileTreePanelState extends State<FileTreePanel> {
           ?widget.tasksPanel,
           ?widget.footer,
         ],
+      ),
+    );
+  }
+}
+
+/// Cabeçalho de seção de uma **root** (multi-root): seta de colapso + nome +
+/// branch + contagem de sujos. Botão-direito abre o menu de contexto da root
+/// (git ops direcionadas — o alvo é o próprio cabeçalho, sem perguntar).
+class _RootHeader extends StatelessWidget {
+  const _RootHeader({
+    required this.root,
+    required this.collapsed,
+    required this.onToggle,
+    this.onContextMenu,
+  });
+
+  final WorkspaceRoot root;
+  final bool collapsed;
+  final VoidCallback onToggle;
+  final void Function(WorkspaceRoot root, Offset globalPosition)? onContextMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+    final git = root.git;
+    final dirty = git?.dirtyCount ?? 0;
+    return GestureDetector(
+      onSecondaryTapDown: onContextMenu == null
+          ? null
+          : (d) => onContextMenu!(root, d.globalPosition),
+      child: HoverTap(
+        hoverColor: colors.panel,
+        borderRadius: BorderRadius.circular(5),
+        onTap: onToggle,
+        padding: const EdgeInsets.only(left: 4, right: 6),
+        child: SizedBox(
+          height: 28,
+          child: Row(
+            children: [
+              Icon(
+                collapsed
+                    ? Icons.keyboard_arrow_right
+                    : Icons.keyboard_arrow_down,
+                size: 15,
+                color: colors.text3,
+              ),
+              const SizedBox(width: 2),
+              // Nome da root inteiro, sempre — quem trunca é a branch.
+              Text(
+                root.name,
+                style: typo.body.copyWith(
+                  fontSize: 12.5,
+                  color: colors.text,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (git != null) ...[
+                const SizedBox(width: 8),
+                Icon(Icons.call_split, size: 10, color: colors.warn),
+                const SizedBox(width: 3),
+                Flexible(
+                  child: Text(
+                    git.branch,
+                    overflow: TextOverflow.ellipsis,
+                    style: typo.mono.copyWith(
+                      fontSize: 10,
+                      color: colors.warn,
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              if (dirty > 0)
+                Text(
+                  '$dirty',
+                  style: typo.mono.copyWith(
+                    fontSize: 10,
+                    color: colors.edited,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1209,6 +1367,7 @@ class _ChangedFile {
 class _ChangedTree extends StatelessWidget {
   const _ChangedTree({
     required this.rootPath,
+    required this.roots,
     required this.changedPaths,
     required this.gitStatusOf,
     required this.selectedPath,
@@ -1218,6 +1377,9 @@ class _ChangedTree extends StatelessWidget {
   });
 
   final String rootPath;
+
+  /// Roots do workspace (2+ = seções por root; senão fluxo plano).
+  final List<WorkspaceRoot> roots;
   final List<String> changedPaths;
   final GitFileStatus? Function(String absolutePath) gitStatusOf;
   final String? selectedPath;
@@ -1236,12 +1398,47 @@ class _ChangedTree extends StatelessWidget {
       );
     }
 
-    final normalizedRoot = rootPath.endsWith('/') ? rootPath : '$rootPath/';
+    // Multi-root: agrega as mudanças de todas as roots, **seccionadas por
+    // root** — cabeçalho (nome + branch + contagem) e, dentro, a mesma
+    // visualização (lista/hierarquia) com paths relativos à root. Roots
+    // limpas não têm seção. Single-root cai no fluxo plano (sem cabeçalho).
+    if (roots.length > 1) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final root in roots)
+              ..._rootSection(context, root, _filesUnder(root.path)),
+          ],
+        ),
+      );
+    }
+
+    final files = _filesUnder(rootPath);
+    if (viewAsTree) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        child: _buildTree(files),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: _buildRows(files),
+      ),
+    );
+  }
+
+  /// Mudanças sob [base], com paths relativos a ela, ordenadas por pasta.
+  List<_ChangedFile> _filesUnder(String base) {
+    final normalized = base.endsWith('/') ? base : '$base/';
     final files = <_ChangedFile>[];
     for (final abs in changedPaths) {
-      final rel = abs.startsWith(normalizedRoot)
-          ? abs.substring(normalizedRoot.length)
-          : abs;
+      if (!abs.startsWith(normalized)) continue;
+      final rel = abs.substring(normalized.length);
       final slash = rel.lastIndexOf('/');
       files.add(
         _ChangedFile(
@@ -1257,39 +1454,127 @@ class _ChangedTree extends StatelessWidget {
       final bp = b.dir.isEmpty ? b.name : '${b.dir}/${b.name}';
       return ap.toLowerCase().compareTo(bp.toLowerCase());
     });
+    return files;
+  }
 
-    if (viewAsTree) {
-      final root = _ChangedDirectory('');
-      for (final file in files) {
-        root.add(file);
-      }
-      return SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-        child: _ChangedDirectoryView(
-          directory: root,
-          gitStatusOf: gitStatusOf,
-          selectedPath: selectedPath,
-          onOpenDiff: onOpenDiff,
-          onTapDiff: onTapDiff,
-        ),
-      );
+  Widget _buildTree(List<_ChangedFile> files) {
+    final root = _ChangedDirectory('');
+    for (final file in files) {
+      root.add(file);
     }
+    return _ChangedDirectoryView(
+      directory: root,
+      gitStatusOf: gitStatusOf,
+      selectedPath: selectedPath,
+      onOpenDiff: onOpenDiff,
+      onTapDiff: onTapDiff,
+    );
+  }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final f in files)
-            _ChangedRow(
-              file: f,
-              gitStatus: gitStatusOf(f.absPath),
-              selected: f.absPath == selectedPath,
-              onTap: () => onTapDiff(f.absPath),
-              onDoubleTap: () => onOpenDiff(f.absPath),
-            ),
-        ],
+  List<Widget> _buildRows(List<_ChangedFile> files) => [
+    for (final f in files)
+      _ChangedRow(
+        file: f,
+        gitStatus: gitStatusOf(f.absPath),
+        selected: f.absPath == selectedPath,
+        onTap: () => onTapDiff(f.absPath),
+        onDoubleTap: () => onOpenDiff(f.absPath),
       ),
+  ];
+
+  /// Seção de uma root no modo multi-root. Root limpa = sem seção.
+  List<Widget> _rootSection(
+    BuildContext context,
+    WorkspaceRoot root,
+    List<_ChangedFile> files,
+  ) {
+    if (files.isEmpty) return const [];
+    return [
+      _ScRootSection(
+        root: root,
+        // O corpo respeita o toggle lista/hierarquia vigente.
+        body: viewAsTree
+            ? _buildTree(files)
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _buildRows(files),
+              ),
+      ),
+    ];
+  }
+}
+
+/// Seção **colapsável** de uma root no Source Control multi-root: cabeçalho
+/// (seta + nome inteiro + branch truncável) e o corpo (lista/hierarquia).
+/// O nome da root nunca trunca — quem cede espaço é a branch.
+class _ScRootSection extends StatefulWidget {
+  const _ScRootSection({required this.root, required this.body});
+
+  final WorkspaceRoot root;
+  final Widget body;
+
+  @override
+  State<_ScRootSection> createState() => _ScRootSectionState();
+}
+
+class _ScRootSectionState extends State<_ScRootSection> {
+  bool _expanded = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+    final root = widget.root;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        HoverTap(
+          hoverColor: colors.panel,
+          borderRadius: BorderRadius.circular(5),
+          onTap: () => setState(() => _expanded = !_expanded),
+          padding: const EdgeInsets.only(left: 2, right: 6),
+          child: SizedBox(
+            height: 26,
+            child: Row(
+              children: [
+                Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_arrow_right,
+                  size: 15,
+                  color: colors.text3,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  root.name,
+                  style: typo.body.copyWith(
+                    fontSize: 12.5,
+                    color: colors.text,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (root.git != null) ...[
+                  const SizedBox(width: 8),
+                  Icon(Icons.call_split, size: 10, color: colors.warn),
+                  const SizedBox(width: 3),
+                  Flexible(
+                    child: Text(
+                      root.git!.branch,
+                      overflow: TextOverflow.ellipsis,
+                      style: typo.mono.copyWith(
+                        fontSize: 10,
+                        color: colors.warn,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        if (_expanded) widget.body,
+        const SizedBox(height: 6),
+      ],
     );
   }
 }

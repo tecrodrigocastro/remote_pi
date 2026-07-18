@@ -13,6 +13,7 @@ import 'package:cockpit/app/cockpit/domain/contracts/git_command_runner.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/git_process_dialog.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/widgets.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
+import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
 import 'package:cockpit/app/core/ui/settings_controller.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:cockpit/app/core/utils/native_folder_picker.dart';
@@ -364,35 +365,156 @@ class _CockpitPageState extends State<CockpitPage> {
     }
   }
 
+  /// Menu de contexto do **cabeçalho de uma root** (workspace multi-root).
+  /// Git ops direcionadas — o alvo é a root clicada, sem perguntar (o outro
+  /// caminho, o kebab do workspace, pergunta a root via submenu).
+  Future<void> _showRootContextMenu(
+    WorkspaceRoot root,
+    Offset globalPosition,
+  ) async {
+    final vm = _vm;
+    final project = vm.selectedProject;
+    if (project == null) return;
+    final hasGit = root.git != null;
+    final action = await showAppMenu<_RootMenuAction>(
+      context,
+      globalPosition: globalPosition,
+      items: [
+        AppMenuItem(
+          value: _RootMenuAction.sync,
+          label: 'Sync',
+          icon: Icons.sync,
+          enabled: hasGit,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.pull,
+          label: 'Pull',
+          icon: Icons.arrow_downward,
+          enabled: hasGit,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.push,
+          label: 'Push',
+          icon: Icons.arrow_upward,
+          enabled: hasGit,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.worktree,
+          label: 'Create worktree',
+          icon: Icons.call_split,
+          enabled: hasGit,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.newTerminal,
+          label: 'New terminal here',
+          icon: Icons.terminal,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.newAgent,
+          label: 'New agent here',
+          icon: Icons.smart_toy_outlined,
+        ),
+        AppMenuItem(
+          value: _RootMenuAction.reveal,
+          label: 'Open with…',
+          icon: Icons.folder_open,
+        ),
+      ],
+    );
+    if (action == null || !mounted) return;
+    // Sub relativo da root dentro da pasta-mãe (pro cwd das abas novas).
+    final sub = root.path == project.path
+        ? ''
+        : root.path.startsWith('${project.path}/')
+        ? root.path.substring(project.path.length + 1)
+        : root.path;
+    switch (action) {
+      case _RootMenuAction.sync:
+        final run = vm.gitSync(root.path);
+        await showGitProcessDialog(
+          context,
+          title: 'Sync — ${root.name}',
+          output: run.output,
+          success: run.exitCode.then((c) => c == 0),
+        );
+      case _RootMenuAction.pull:
+        final run = vm.gitPull(root.path);
+        await showGitProcessDialog(
+          context,
+          title: 'Pull — ${root.name}',
+          output: run.output,
+          success: run.exitCode.then((c) => c == 0),
+        );
+      case _RootMenuAction.push:
+        final run = vm.gitPush(root.path);
+        await showGitProcessDialog(
+          context,
+          title: 'Push — ${root.name}',
+          output: run.output,
+          success: run.exitCode.then((c) => c == 0),
+        );
+      case _RootMenuAction.worktree:
+        final namespace = await vm.worktreeNamespace(
+          project.id,
+          rootPath: root.path,
+        );
+        if (!mounted) return;
+        await showWorktreeCreateDialog(
+          context,
+          rootName: root.name,
+          namespace: namespace,
+          onCreate: (name) async {
+            final res = await vm.createWorktree(
+              project.id,
+              name,
+              rootPath: root.path,
+            );
+            return res.fold((_) => null, (e) => e.message);
+          },
+        );
+      case _RootMenuAction.newTerminal:
+        vm.newTabIn(sub, terminal: true);
+      case _RootMenuAction.newAgent:
+        vm.newTabIn(sub, terminal: false);
+      case _RootMenuAction.reveal:
+        vm.openWithDefaultApp(root.path);
+    }
+  }
+
+  /// Rótulo da operação git: nome do workspace em single-root; basename da
+  /// root em multi-root (a root já veio escolhida do submenu do kebab).
+  String _gitOpLabel(Project project, String rootPath) =>
+      rootPath == project.path ? project.name : rootPath.split('/').last;
+
   /// "Criar worktree": busca o namespace (branches + worktrees) pra validação ao
   /// vivo e abre o dialog. O dialog roda o `git worktree add` via `onCreate` e a
   /// VM auto-seleciona o fork novo (decisões 14, 21).
   /// Sync (pull → push) do workspace, com o processo ao vivo num dialog.
-  Future<void> _syncProject(Project project) async {
-    final run = _vm.gitSync(project.path);
+  Future<void> _syncProject(Project project, String rootPath) async {
+    final run = _vm.gitSync(rootPath);
     await showGitProcessDialog(
       context,
-      title: 'Sync — ${project.name}',
+      title: 'Sync — ${_gitOpLabel(project, rootPath)}',
       output: run.output,
       success: run.exitCode.then((c) => c == 0),
     );
   }
 
-  Future<void> _pullProject(Project project) async {
-    final run = _vm.gitPull(project.path);
+  Future<void> _pullProject(Project project, String rootPath) async {
+    final run = _vm.gitPull(rootPath);
     await showGitProcessDialog(
       context,
-      title: 'Pull — ${project.name}',
+      title: 'Pull — ${_gitOpLabel(project, rootPath)}',
       output: run.output,
       success: run.exitCode.then((c) => c == 0),
     );
   }
 
-  Future<void> _pushProject(Project project) async {
-    final run = _vm.gitPush(project.path);
+  Future<void> _pushProject(Project project, String rootPath) async {
+    final run = _vm.gitPush(rootPath);
     await showGitProcessDialog(
       context,
-      title: 'Push — ${project.name}',
+      title: 'Push — ${_gitOpLabel(project, rootPath)}',
       output: run.output,
       success: run.exitCode.then((c) => c == 0),
     );
@@ -413,16 +535,18 @@ class _CockpitPageState extends State<CockpitPage> {
     );
   }
 
-  Future<void> _createWorktree(Project root) async {
+  Future<void> _createWorktree(Project root, String rootPath) async {
     final vm = _vm;
-    final namespace = await vm.worktreeNamespace(root.id);
+    // Multi-root: a worktree é de UMA root — a escolha já veio do submenu do
+    // kebab (o fork nasce como filho single-root apontando pro checkout dela).
+    final namespace = await vm.worktreeNamespace(root.id, rootPath: rootPath);
     if (!mounted) return;
     await showWorktreeCreateDialog(
       context,
-      rootName: root.name,
+      rootName: _gitOpLabel(root, rootPath),
       namespace: namespace,
       onCreate: (name) async {
-        final res = await vm.createWorktree(root.id, name);
+        final res = await vm.createWorktree(root.id, name, rootPath: rootPath);
         return res.fold((_) => null, (e) => e.message);
       },
     );
@@ -597,6 +721,16 @@ class _CockpitPageState extends State<CockpitPage> {
                             selectedId: vm.selectedProjectId,
                             notificationCount: vm.notificationCount,
                             gitInfo: vm.gitInfo,
+                            rootsSummary: vm.rootsGitSummary,
+                            forkOriginName: vm.forkOriginName,
+                            rootsOf: (id) => [
+                              for (final r in vm.rootsOf(id))
+                                (
+                                  path: r,
+                                  name: r.split('/').last,
+                                  branch: vm.gitInfoForRoot(r)?.branch,
+                                ),
+                            ],
                             onSelect: vm.selectProject,
                             onAdd: _createWorkspace,
                             onConfigure: _configureProject,
@@ -666,6 +800,18 @@ class _CockpitPageState extends State<CockpitPage> {
                             key: ValueKey(vm.selectedProject?.path ?? ''),
                             width: _treeWidth,
                             rootPath: vm.selectedProject?.path ?? '',
+                            // Roots derivadas (multi-root = seções por repo).
+                            roots: [
+                              for (final r in vm.selectedProject == null
+                                  ? const <String>[]
+                                  : vm.rootsOf(vm.selectedProject!.id))
+                                WorkspaceRoot(
+                                  path: r,
+                                  name: r.split('/').last,
+                                  git: vm.gitInfoForRoot(r),
+                                ),
+                            ],
+                            onRootContextMenu: _showRootContextMenu,
                             revision: vm.fileTreeRevision,
                             selectedPath: vm.selectedFileInTree,
                             listChildren: vm.listChildren,
@@ -967,4 +1113,15 @@ class _LspStatusBarState extends State<_LspStatusBar> {
             ),
     );
   }
+}
+
+/// Ações do menu de contexto do cabeçalho de uma root (multi-root).
+enum _RootMenuAction {
+  sync,
+  pull,
+  push,
+  worktree,
+  newTerminal,
+  newAgent,
+  reveal,
 }
