@@ -65,7 +65,7 @@ dependencies:
   google_fonts: ^6.2.1
 
   # Wave 2 — renderiza o Markdown (GFM + code) da resposta do agente.
-  gpt_markdown: ^1.1.7
+  gpt_markdown: ^1.1.8
 
   # Wave 2 — notificações nativas do SO (agente terminou um turno).
   flutter_local_notifications: ^18.0.1
@@ -159,10 +159,6 @@ dependencies:
 
 dependency_overrides:
 
-  gpt_markdown:
-    git:
-      url: https://github.com/jacobaraujo7/gpt_markdown
-      ref: v1.2.2
   # Fork do kyroon_pty com dois fixes no `kyroon_pty_win.c`:
   #
   # 1. UB em `build_working_directory`, que quebrava o spawn de PTY no Windows
