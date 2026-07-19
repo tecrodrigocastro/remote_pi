@@ -143,13 +143,13 @@ dependencies:
   # 0.1.1 publicado no pub.dev com os fixes (#2/#4/#5/#6): binários por native
   # assets, loader via asset-id, colunas em ordem. Resolvido direto do pub.dev.
   anaki_orm: ^0.1.1
-  anaki_sqlite: ^0.1.1
-  anaki_postgres: ^0.1.1
-  anaki_mysql: ^0.1.1
-  anaki_mssql: ^0.1.1
+  anaki_sqlite: ^0.1.2
+  anaki_postgres: ^0.1.2
+  anaki_mysql: ^0.1.2
+  anaki_mssql: ^0.1.2
   # NoSQL/cache — acesso APENAS via CLI por enquanto (sem UI); ver plano 51.
-  anaki_redis: ^0.1.1
-  anaki_mongodb: ^0.1.1
+  anaki_redis: ^0.1.2
+  anaki_mongodb: ^0.1.2
 
 dependency_overrides:
 
