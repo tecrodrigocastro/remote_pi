@@ -93,10 +93,16 @@ class _DbPanelState extends State<DbPanel> {
       anchor,
       items: [
         const AppMenuItem(value: 'edit', label: 'Edit…', icon: Icons.edit),
-        // "New query" só faz sentido pros SQL (abre tab `.dbq`). Redis/Mongo
-        // são CLI-only.
+        // "New query" só faz sentido pros SQL (abre tab `.dbq`). Redis abre a
+        // tabela de chaves (plano 52); Mongo segue CLI-only.
         if (conn.engine.isSql)
           const AppMenuItem(value: 'dbq', label: 'New query', icon: Icons.add),
+        if (conn.engine == DbEngine.redis)
+          const AppMenuItem(
+            value: 'redis',
+            label: 'Browse keys',
+            icon: Icons.grid_on_outlined,
+          ),
         const AppMenuItem.divider(),
         const AppMenuItem(
           value: 'delete',
@@ -112,6 +118,8 @@ class _DbPanelState extends State<DbPanel> {
         await _edit(conn);
       case 'dbq':
         _newDbq(conn);
+      case 'redis':
+        context.read<CockpitViewModel>().openRedisBrowser(conn.name);
       case 'delete':
         await _delete(conn);
     }
@@ -270,15 +278,23 @@ class _ConnectionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final typo = context.typo;
-    // Redis/Mongo são CLI-only: sem árvore de schema, sem chevron.
+    // SQL expande a árvore de schema; Redis abre a tabela de chaves (plano
+    // 52); Mongo segue CLI-only (sem ação no clique).
     final browsable = conn.engine.isSql;
+    final isRedis = conn.engine == DbEngine.redis;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 1),
           child: HoverTap(
-            onTap: browsable ? onToggle : null,
+            onTap: browsable
+                ? onToggle
+                : isRedis
+                ? () => context.read<CockpitViewModel>().openRedisBrowser(
+                    conn.name,
+                  )
+                : null,
             padding: const EdgeInsets.fromLTRB(4, 5, 6, 5),
             child: Row(
               children: [
@@ -316,7 +332,9 @@ class _ConnectionTile extends StatelessWidget {
                             const SizedBox(width: 6),
                             const _Chip('local'),
                           ],
-                          if (!browsable) ...[
+                          // Redis abre a tabela de chaves (plano 52) — só o
+                          // Mongo segue CLI-only.
+                          if (!browsable && !isRedis) ...[
                             const SizedBox(width: 6),
                             const _Chip('CLI only'),
                           ],

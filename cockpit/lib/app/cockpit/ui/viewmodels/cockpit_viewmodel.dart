@@ -60,6 +60,7 @@ import 'package:cockpit/app/cockpit/ui/session/agent_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/diff_viewer_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/file_viewer_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/pane_item.dart';
+import 'package:cockpit/app/cockpit/ui/session/redis_browser_session.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/task_discovery.dart';
 import 'package:cockpit/app/cockpit/domain/contracts/task_runner_gateway.dart';
 import 'package:cockpit/app/cockpit/ui/session/task_output_session.dart';
@@ -710,6 +711,38 @@ class CockpitViewModel extends ChangeNotifier {
     );
     _sessions[scratch.id] = scratch;
     _addLeafTab(projectId, paneId, scratch.id);
+    notifyListeners();
+  }
+
+  /// Abre (ou foca) a tabela Redis da conexão [connName] (plano 52). Uma tab
+  /// por conexão+projeto: reabrir foca a existente em vez de duplicar.
+  void openRedisBrowser(String connName) {
+    final projectId = _selectedProjectId;
+    final tree = _activeTree;
+    final paneId = projectId == null ? null : _focused[projectId];
+    if (projectId == null || tree == null || paneId == null) return;
+
+    for (final s in _sessions.values) {
+      if (s is RedisBrowserSession &&
+          s.projectId == projectId &&
+          s.connName == connName) {
+        for (final leaf in leaves(tree)) {
+          if (leaf.tabs.contains(s.id)) {
+            selectTab(leaf.id, s.id);
+            return;
+          }
+        }
+      }
+    }
+
+    final session = RedisBrowserSession(
+      id: _nid('v'),
+      projectId: projectId,
+      connName: connName,
+      workingDirectory: _projectById(projectId)?.path ?? '',
+    );
+    _sessions[session.id] = session;
+    _addLeafTab(projectId, paneId, session.id);
     notifyListeners();
   }
 
@@ -3153,6 +3186,7 @@ class CockpitViewModel extends ChangeNotifier {
     if (s is AgentSession) return 'agent';
     if (s is FileViewerSession) return 'file';
     if (s is TaskOutputSession) return 'task';
+    if (s is RedisBrowserSession) return 'redis';
     return 'other';
   }
 
@@ -3414,6 +3448,16 @@ class CockpitViewModel extends ChangeNotifier {
           diff: diff,
         );
         return true;
+      case 'redis':
+        final conn = desc['conn'] as String?;
+        if (conn == null || conn.isEmpty) return false;
+        _sessions[id] = RedisBrowserSession(
+          id: id,
+          projectId: project.id,
+          connName: conn,
+          workingDirectory: project.path,
+        );
+        return true;
       case 'empty':
         _makeEmptyWithId(id, project.id);
         return true;
@@ -3636,6 +3680,9 @@ class CockpitViewModel extends ChangeNotifier {
     }
     if (s is DiffViewerSession) {
       return <String, dynamic>{'type': 'diff', 'path': s.path};
+    }
+    if (s is RedisBrowserSession) {
+      return <String, dynamic>{'type': 'redis', 'conn': s.connName};
     }
     if (s is TaskOutputSession) {
       // A task não roda de novo no restart, mas o output persiste: guarda o

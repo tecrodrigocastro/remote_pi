@@ -116,6 +116,26 @@ class DbQueryService {
     return _nosql.redis(conn, parts, password: password);
   });
 
+  /// Redis em lote (tabela do plano 52): [commands] em sequência numa única
+  /// conexão, replies na mesma ordem. Mesma resolução de conexão/senha do
+  /// [redisCommand] — a UI executa exatamente o que o agente executaria.
+  Future<List<Object?>> redisBatch({
+    required String workspaceRoot,
+    required String workspaceId,
+    required String connName,
+    required List<List<String>> commands,
+  }) => _serialized(() async {
+    final conn = await _resolve(workspaceRoot, connName);
+    if (conn.engine != DbEngine.redis) {
+      throw DbQueryException(
+        'unsupported_engine',
+        '"$connName" is a ${conn.engine.label} connection, not Redis.',
+      );
+    }
+    final password = await _passwordFor(conn, workspaceId);
+    return _nosql.redisMany(conn, commands, password: password);
+  });
+
   /// Mongo (CLI-only): roda `command` (runCommand) e devolve o doc JSON.
   Future<Object?> mongoCommand({
     required String workspaceRoot,

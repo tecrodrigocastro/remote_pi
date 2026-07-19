@@ -5,6 +5,7 @@ import 'package:cockpit/app/cockpit/ui/session/agent_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/diff_viewer_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/file_viewer_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/pane_item.dart';
+import 'package:cockpit/app/cockpit/ui/session/redis_browser_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/task_output_session.dart';
 import 'package:cockpit/app/cockpit/ui/session/terminal_session.dart';
 import 'package:cockpit/app/cockpit/ui/states/pane_node.dart';
@@ -19,6 +20,7 @@ import 'package:cockpit/app/cockpit/ui/widgets/confirm_dialog.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/empty_pane.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/diff_viewer.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/db_query_view.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/db_redis_table.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/file_viewer.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/terminal_pane.dart';
 import 'package:cockpit/app/core/ui/file_icons/file_icons.dart';
@@ -142,6 +144,7 @@ IconData _tabIcon(PaneItem? item) {
   if (item is TaskOutputSession) return Icons.play_circle_outline;
   if (item is FileViewerSession) return Icons.description_outlined;
   if (item is DiffViewerSession) return Icons.difference_outlined;
+  if (item is RedisBrowserSession) return Icons.grid_on_outlined;
   if (item is AgentSession && item.status == AgentStatus.empty) {
     return Icons.edit_outlined;
   }
@@ -1226,6 +1229,17 @@ class _PaneBodyState extends State<_PaneBody> {
     // Viewer de diff (read-only, split): comparação com o HEAD do git.
     if (item is DiffViewerSession) {
       return DiffViewer(session: item);
+    }
+
+    // Tabela Redis (plano 52): a tabela editável é a interface única da tab.
+    if (item is RedisBrowserSession) {
+      final vm = context.read<CockpitViewModel>();
+      return RedisTableView(
+        session: item,
+        active: widget.active,
+        focused: widget.focused,
+        workspaceRoot: vm.projectRootOf(item.projectId) ?? '',
+      );
     }
 
     // Tab de query `.dbq` (plano 51): editor SQL + grid de resultado. Reusa a

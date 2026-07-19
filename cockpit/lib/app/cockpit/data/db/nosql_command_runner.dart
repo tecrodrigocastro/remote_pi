@@ -49,6 +49,48 @@ class NoSqlRunnerImpl implements NoSqlRunner {
     );
   }
 
+  /// Redis em lote: mesma conexão pra todos os [commands] (plano 52 — a
+  /// tabela dispara TYPE/TTL/preview por chave; efêmero por comando não dá).
+  @override
+  Future<List<Object?>> redisMany(
+    DbConnection conn,
+    List<List<String>> commands, {
+    String? password,
+  }) async {
+    if (commands.isEmpty) return const [];
+    for (final parts in commands) {
+      if (parts.isEmpty) {
+        throw const DbQueryException('query_failed', 'Empty Redis command.');
+      }
+    }
+    final host = conn.host;
+    final port = conn.port;
+    final user = conn.user.isEmpty ? null : conn.user;
+    final db = int.tryParse(conn.database) ?? 0;
+    final result = await _guard(
+      () => Isolate.run(() async {
+        final client = AnakiRedis(
+          host: host,
+          port: port,
+          username: user,
+          password: password,
+          db: db,
+        );
+        await client.open();
+        try {
+          final replies = <Object?>[];
+          for (final parts in commands) {
+            replies.add(_jsonable(await client.command(parts)));
+          }
+          return replies;
+        } finally {
+          await client.close();
+        }
+      }),
+    );
+    return (result as List).cast<Object?>();
+  }
+
   /// Mongo: roda um comando (`{find: 'users', filter: {...}}`) via `runCommand`
   /// e devolve o documento de resposta, normalizado pra JSON.
   @override
