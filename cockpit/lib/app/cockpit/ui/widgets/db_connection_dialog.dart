@@ -1,5 +1,6 @@
 import 'package:cockpit/app/cockpit/domain/entities/db_connection.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/db_engine_icon.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:file_picker/file_picker.dart';
@@ -248,11 +249,15 @@ class _DbConnectionDialogState extends State<DbConnectionDialog> {
 
   Widget _dialog(AppColors colors, AppTypography typo) {
     return AlertDialog(
-      title: Text(
-        _editing
-            ? 'Edit connection — ${_engine.label}'
-            : 'New connection — ${_engine.label}',
-        style: typo.title.copyWith(fontSize: 15, color: colors.text),
+      title: Row(
+        children: [
+          DbEngineIcon(_engine, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            _editing ? 'Edit connection' : 'New connection',
+            style: typo.title.copyWith(fontSize: 15, color: colors.text),
+          ),
+        ],
       ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 380),

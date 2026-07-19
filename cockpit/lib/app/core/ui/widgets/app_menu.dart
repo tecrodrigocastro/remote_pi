@@ -8,6 +8,7 @@ class AppMenuItem<T> {
     required T this.value,
     required this.label,
     this.icon,
+    this.leading,
     this.selected = false,
     this.danger = false,
     this.enabled = true,
@@ -20,6 +21,7 @@ class AppMenuItem<T> {
     : value = null,
       label = '',
       icon = null,
+      leading = null,
       selected = false,
       danger = false,
       enabled = false,
@@ -30,6 +32,9 @@ class AppMenuItem<T> {
   final T? value;
   final String label;
   final IconData? icon;
+
+  /// Widget de ícone à esquerda (ex.: logo SVG). Vence [icon] quando presente.
+  final Widget? leading;
   final bool selected;
   final bool danger;
 
@@ -111,15 +116,17 @@ Future<T?> showAppMenu<T>(
             else
               MenuButton(
                 enabled: item.enabled,
-                leading: item.icon != null
-                    ? Icon(
-                        item.icon,
-                        size: 15,
-                        color: !item.enabled
-                            ? colors.text4
-                            : (item.danger ? colors.error : colors.text3),
-                      )
-                    : null,
+                leading:
+                    item.leading ??
+                    (item.icon != null
+                        ? Icon(
+                            item.icon,
+                            size: 15,
+                            color: !item.enabled
+                                ? colors.text4
+                                : (item.danger ? colors.error : colors.text3),
+                          )
+                        : null),
                 trailing: item.selected
                     ? Icon(Icons.check, size: 14, color: colors.accentText)
                     : null,

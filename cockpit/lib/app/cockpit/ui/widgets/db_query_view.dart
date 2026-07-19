@@ -7,6 +7,7 @@ import 'package:cockpit/app/cockpit/domain/entities/dbq_document.dart';
 import 'package:cockpit/app/cockpit/domain/entities/file_view.dart';
 import 'package:cockpit/app/cockpit/domain/entities/sql_statements.dart';
 import 'package:cockpit/app/cockpit/ui/session/file_viewer_session.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/db_engine_icon.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/core/ui/menu/editor_menu_bridge.dart';
@@ -338,7 +339,7 @@ class _DbQueryViewState extends State<DbQueryView> {
           AppMenuItem(
             value: c.name,
             label: '${c.name} · ${c.engine.label}',
-            icon: Icons.storage,
+            leading: DbEngineIcon(c.engine, size: 15),
             selected: c.name == _connName,
           ),
         if (conns.isEmpty)
@@ -457,7 +458,9 @@ class _DbQueryViewState extends State<DbQueryView> {
       ),
       child: Row(
         children: [
-          Icon(Icons.storage, size: 14, color: colors.accent),
+          conn == null
+              ? Icon(Icons.storage, size: 14, color: colors.accent)
+              : DbEngineIcon(conn.engine, size: 14),
           const SizedBox(width: 8),
           Builder(
             builder: (anchor) => HoverTap(

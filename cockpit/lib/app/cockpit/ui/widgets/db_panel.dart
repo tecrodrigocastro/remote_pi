@@ -4,6 +4,7 @@ import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/confirm_dialog.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/db_connection_dialog.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/db_engine_icon.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
 import 'package:cockpit/app/core/ui/widgets/app_tooltip.dart';
@@ -63,7 +64,11 @@ class _DbPanelState extends State<DbPanel> {
       anchor,
       items: [
         for (final e in DbEngine.values)
-          AppMenuItem(value: e, label: e.label, icon: Icons.storage),
+          AppMenuItem(
+            value: e,
+            label: e.label,
+            leading: DbEngineIcon(e, size: 15),
+          ),
       ],
     );
     if (engine == null || !mounted) return;
@@ -285,7 +290,7 @@ class _ConnectionTile extends StatelessWidget {
                   color: colors.text4,
                 ),
                 SizedBox(width: browsable ? 2 : 7),
-                Icon(Icons.storage, size: 12, color: colors.text4),
+                DbEngineIcon(conn.engine, size: 13),
                 const SizedBox(width: 7),
                 Expanded(
                   child: Column(
