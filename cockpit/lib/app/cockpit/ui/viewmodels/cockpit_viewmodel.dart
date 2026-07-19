@@ -684,6 +684,97 @@ class CockpitViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Abre uma tab `.dbq` **untitled** (scratch, VSCode-style): buffer em
+  /// memória, sem arquivo no disco até o primeiro save. [connName] pré-seleciona
+  /// a conexão no frontmatter. Plano 51.
+  void openScratchDbq({String? connName, String? sql}) {
+    final projectId = _selectedProjectId;
+    final tree = _activeTree;
+    final paneId = projectId == null ? null : _focused[projectId];
+    if (projectId == null || tree == null || paneId == null) return;
+
+    // Numeração sequencial dos untitled abertos.
+    final used = _sessions.values
+        .whereType<FileViewerSession>()
+        .where((s) => s.scratch)
+        .length;
+    final body = sql ?? 'SELECT 1;';
+    final content = connName == null ? '$body\n' : '-- db: $connName\n$body\n';
+    final scratch = FileViewerSession(
+      id: _nid('v'),
+      projectId: projectId,
+      path: '', // sintético — sem arquivo até salvar
+      view: FileViewText(content, language: 'dbq'),
+      scratch: true,
+      scratchTitle: 'Untitled-${used + 1}.dbq',
+    );
+    _sessions[scratch.id] = scratch;
+    _addLeafTab(projectId, paneId, scratch.id);
+    notifyListeners();
+  }
+
+  /// Salva um buffer scratch como arquivo real [fileName] na raiz do workspace
+  /// (o `.dbq` é anexado se faltar). Retarga a sessão, arma o watcher e limpa
+  /// o flag scratch → daí vira uma tab de arquivo normal. Plano 51.
+  Future<Result<void, String>> saveScratchAs(
+    String sessionId,
+    String fileName,
+    String content,
+  ) async {
+    final s = _sessions[sessionId];
+    if (s is! FileViewerSession || !s.scratch) {
+      return const Failure('not a scratch tab');
+    }
+    var name = fileName.trim();
+    if (name.isEmpty) return const Failure('empty name');
+    if (!name.toLowerCase().endsWith('.dbq')) name = '$name.dbq';
+    final invalid = _validateName(name);
+    if (invalid != null) return Failure(invalid);
+    final root = _projectById(s.projectId)?.path;
+    if (root == null) return const Failure('no workspace');
+    final path = _join(root, name);
+    if (await File(path).exists()) return Failure('"$name" already exists');
+
+    if (!await _fileReader.write(path, content)) {
+      return const Failure('could not write file');
+    }
+    s
+      ..path = path
+      ..scratch = false
+      ..scratchTitle = null
+      ..view = await _fileReader.read(path)
+      ..dirty = false;
+    _watchFileViewer(s);
+    _bumpFileTree();
+    s.notifyListeners();
+    notifyListeners();
+    return const Success(null);
+  }
+
+  /// Enxerta [tabId] como aba nova no leaf [paneId] (substituindo o placeholder
+  /// vazio se for o único). Extraído de [openFile] para reuso pelo scratch.
+  void _addLeafTab(String projectId, String paneId, String tabId) {
+    final current = _trees[projectId];
+    if (current == null) return;
+    final lf = findLeaf(current, paneId);
+    final only = lf?.tabs.length == 1 ? _sessions[lf!.tabs.first] : null;
+    if (lf != null && only is AgentSession && only.status == AgentStatus.empty) {
+      final emptyId = lf.tabs.first;
+      _trees[projectId] = updateLeaf(
+        current,
+        paneId,
+        (p) => p.copyWith(tabs: [tabId], active: tabId),
+      );
+      _disposeSession(emptyId);
+    } else {
+      _trees[projectId] = updateLeaf(
+        current,
+        paneId,
+        (p) => p.copyWith(tabs: [...p.tabs, tabId], active: tabId),
+      );
+    }
+  }
+
   // === Git diff viewer (feature "more git") ===
 
   /// `true` se o workspace [projectId] tem git — single-root: a raiz é repo;

@@ -6,12 +6,12 @@ import 'package:cockpit/app/cockpit/domain/entities/db_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Exercita o [AnakiDbDriver] contra um sqlite REAL em arquivo temporário —
-/// via o conector Rust do anakiORM (dylib buildado localmente).
+/// via o conector Rust do anakiORM.
 ///
-/// O loader do anaki procura `libanaki_sqlite.dylib` no cwd (raiz do package
-/// em `flutter test`); o [setUpAll] copia de `~/.cockpit/anaki/` (staging do
-/// build local — ver plano 51). Sem o dylib, os testes são pulados (máquina
-/// sem o Rust buildado), não quebrados.
+/// O binário nativo é responsabilidade do pacote `anaki_sqlite` (native
+/// assets). Se o loader não encontrar a lib (pacote sem binário empacotado),
+/// os testes são **pulados**, não quebrados — o problema, nesse caso, é do
+/// pacote anaki (issue #4), não do Cockpit.
 void main() {
   const driver = AnakiDbDriver();
   late Directory dir;
@@ -20,14 +20,22 @@ void main() {
 
   DbConnection conn() => DbConnection.sqlite('test', dbPath);
 
-  setUpAll(() {
-    final home = Platform.environment['HOME'] ?? '';
-    final lib = File('libanaki_sqlite.dylib');
-    if (!lib.existsSync()) {
-      final staged = File('$home/.cockpit/anaki/libanaki_sqlite.dylib');
-      if (staged.existsSync()) staged.copySync(lib.path);
+  setUpAll(() async {
+    try {
+      // Toca o driver de leve. O loader do anaki embrulha "lib nativa não
+      // encontrada" como DbQueryException(connection_failed, 'Failed to load
+      // native library...') — só ISSO significa binário ausente; qualquer
+      // outro erro é o driver de fato carregado.
+      await driver.execute(
+        DbConnection.sqlite('probe', '${Directory.systemTemp.path}/probe.db'),
+        'SELECT 1',
+      );
+      libAvailable = true;
+    } on DbQueryException catch (e) {
+      libAvailable = !e.message.contains('Failed to load native library');
+    } catch (_) {
+      libAvailable = false;
     }
-    libAvailable = lib.existsSync();
   });
 
   setUp(() async {

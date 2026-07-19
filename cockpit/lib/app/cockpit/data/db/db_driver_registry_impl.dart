@@ -13,6 +13,7 @@ class DbDriverRegistryImpl implements DbDriverRegistry {
   DbDriver? forEngine(DbEngine engine) => switch (engine) {
     DbEngine.sqlite ||
     DbEngine.postgres ||
-    DbEngine.mysql => const AnakiDbDriver(),
+    DbEngine.mysql ||
+    DbEngine.mssql => const AnakiDbDriver(),
   };
 }

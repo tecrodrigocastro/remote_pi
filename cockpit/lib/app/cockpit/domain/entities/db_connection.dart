@@ -3,13 +3,15 @@
 enum DbEngine {
   sqlite,
   postgres,
-  mysql;
+  mysql,
+  mssql;
 
   /// Label user-facing (inglês, regra do app).
   String get label => switch (this) {
     DbEngine.sqlite => 'SQLite',
     DbEngine.postgres => 'Postgres',
     DbEngine.mysql => 'MySQL',
+    DbEngine.mssql => 'SQL Server',
   };
 
   /// Porta default do engine (0 = não se aplica).
@@ -17,6 +19,7 @@ enum DbEngine {
     DbEngine.sqlite => 0,
     DbEngine.postgres => 5432,
     DbEngine.mysql => 3306,
+    DbEngine.mssql => 1433,
   };
 }
 

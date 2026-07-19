@@ -1231,7 +1231,8 @@ class _PaneBodyState extends State<_PaneBody> {
     // Tab de query `.dbq` (plano 51): editor SQL + grid de resultado. Reusa a
     // FileViewerSession (preview/dirty/watch/persistência de graça); só o
     // render diverge.
-    if (item is FileViewerSession && item.path.toLowerCase().endsWith('.dbq')) {
+    if (item is FileViewerSession &&
+        (item.scratch || item.path.toLowerCase().endsWith('.dbq'))) {
       final vm = context.read<CockpitViewModel>();
       return DbQueryView(
         session: item,

@@ -1,8 +1,12 @@
 import 'package:cockpit/app/cockpit/domain/entities/db_connection.dart';
+import 'package:cockpit/app/cockpit/domain/entities/db_result.dart';
+import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
+import 'package:cockpit/app/cockpit/ui/widgets/confirm_dialog.dart';
 import 'package:cockpit/app/cockpit/ui/widgets/db_connection_dialog.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
 import 'package:cockpit/app/core/ui/widgets/app_menu.dart';
+import 'package:cockpit/app/core/ui/widgets/app_tooltip.dart';
 import 'package:cockpit/app/core/ui/widgets/hover_tap.dart';
 import 'package:flutter_modular/flutter_modular.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart';
@@ -71,6 +75,40 @@ class _DbPanelState extends State<DbPanel> {
     await vm.upsert(result!.connection!, password: result.password);
   }
 
+  /// Conexões expandidas (schema visível). Estado local do painel.
+  final _expanded = <String>{};
+
+  void _toggle(String name) => setState(() {
+    if (!_expanded.remove(name)) _expanded.add(name);
+  });
+
+  /// Menu de contexto de uma conexão: Edit · New .dbq · Delete (confirmado).
+  Future<void> _contextMenu(BuildContext anchor, DbConnection conn) async {
+    final action = await showAppMenu<String>(
+      anchor,
+      items: [
+        const AppMenuItem(value: 'edit', label: 'Edit…', icon: Icons.edit),
+        const AppMenuItem(value: 'dbq', label: 'New query', icon: Icons.add),
+        const AppMenuItem.divider(),
+        const AppMenuItem(
+          value: 'delete',
+          label: 'Delete',
+          icon: Icons.delete_outline,
+          danger: true,
+        ),
+      ],
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'edit':
+        await _edit(conn);
+      case 'dbq':
+        _newDbq(conn);
+      case 'delete':
+        await _delete(conn);
+    }
+  }
+
   Future<void> _edit(DbConnection conn) async {
     final vm = context.read<DatabaseViewModel>();
     final result = await showDialog<DbConnectionDialogResult>(
@@ -80,9 +118,7 @@ class _DbPanelState extends State<DbPanel> {
     );
     if (result == null) return;
     if (result.deleted) {
-      if (conn.origin == DbConnectionOrigin.registered) {
-        await vm.remove(conn);
-      }
+      if (conn.origin == DbConnectionOrigin.registered) await vm.remove(conn);
       return;
     }
     if (result.connection != null) {
@@ -93,6 +129,33 @@ class _DbPanelState extends State<DbPanel> {
         previousName: conn.name,
       );
     }
+  }
+
+  void _newDbq(DbConnection conn, {String? table}) {
+    // Untitled (VSCode-style): abre um buffer scratch — o arquivo só nasce no
+    // primeiro save. Tabela → já preenche o SELECT.
+    context.read<CockpitViewModel>().openScratchDbq(
+      connName: conn.name,
+      sql: table == null ? null : 'SELECT * FROM $table LIMIT 100;',
+    );
+  }
+
+  Future<void> _delete(DbConnection conn) async {
+    if (conn.origin != DbConnectionOrigin.registered) {
+      // detected/local não moram no databases.json → nada a excluir.
+      return;
+    }
+    final ok = await showConfirmDialog(
+      context,
+      title: 'Delete connection',
+      message: 'Remove "${conn.name}" from this workspace? '
+          'Any saved password is discarded. .dbq files that reference it '
+          'are not touched.',
+      confirmLabel: 'Delete',
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    await context.read<DatabaseViewModel>().remove(conn);
   }
 
   @override
@@ -149,8 +212,13 @@ class _DbPanelState extends State<DbPanel> {
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   itemCount: conns.length,
-                  itemBuilder: (context, i) =>
-                      _ConnectionRow(conn: conns[i], onTap: _edit),
+                  itemBuilder: (context, i) => _ConnectionTile(
+                    conn: conns[i],
+                    expanded: _expanded.contains(conns[i].name),
+                    onToggle: () => _toggle(conns[i].name),
+                    onContextMenu: _contextMenu,
+                    onNewQuery: (table) => _newDbq(conns[i], table: table),
+                  ),
                 ),
         ),
         Container(
@@ -170,72 +238,307 @@ class _DbPanelState extends State<DbPanel> {
   }
 }
 
-class _ConnectionRow extends StatelessWidget {
-  const _ConnectionRow({required this.conn, required this.onTap});
+/// Linha da conexão + (quando expandida) a árvore de schema lazy embaixo.
+class _ConnectionTile extends StatelessWidget {
+  const _ConnectionTile({
+    required this.conn,
+    required this.expanded,
+    required this.onToggle,
+    required this.onContextMenu,
+    required this.onNewQuery,
+  });
 
   final DbConnection conn;
-  final void Function(DbConnection) onTap;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final Future<void> Function(BuildContext anchor, DbConnection conn)
+  onContextMenu;
+
+  /// Cria um "New query" com SELECT * FROM <table>.
+  final void Function(String table) onNewQuery;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1),
+          child: HoverTap(
+            onTap: onToggle,
+            padding: const EdgeInsets.fromLTRB(4, 5, 6, 5),
+            child: Row(
+              children: [
+                Icon(
+                  expanded ? Icons.expand_more : Icons.chevron_right,
+                  size: 15,
+                  color: colors.text4,
+                ),
+                const SizedBox(width: 2),
+                Icon(Icons.storage, size: 12, color: colors.text4),
+                const SizedBox(width: 7),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              conn.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: typo.body.copyWith(
+                                fontSize: 12.5,
+                                color: colors.text2,
+                              ),
+                            ),
+                          ),
+                          if (conn.origin == DbConnectionOrigin.detected) ...[
+                            const SizedBox(width: 6),
+                            const _Chip('detected'),
+                          ],
+                          if (conn.origin == DbConnectionOrigin.local) ...[
+                            const SizedBox(width: 6),
+                            const _Chip('local'),
+                          ],
+                        ],
+                      ),
+                      Text(
+                        '${conn.engine.label} · ${conn.displayTarget}',
+                        overflow: TextOverflow.ellipsis,
+                        style: typo.mono.copyWith(
+                          fontSize: 10,
+                          color: colors.text4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Builder(
+                  builder: (anchor) => HoverTap(
+                    onTap: () => onContextMenu(anchor, conn),
+                    padding: const EdgeInsets.all(3),
+                    child: Icon(
+                      Icons.more_horiz,
+                      size: 14,
+                      color: colors.text4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (expanded)
+          _SchemaTree(conn: conn, onNewQuery: onNewQuery),
+      ],
+    );
+  }
+}
+
+/// Árvore de tabelas → colunas de uma conexão, carregada sob demanda.
+class _SchemaTree extends StatefulWidget {
+  const _SchemaTree({required this.conn, required this.onNewQuery});
+  final DbConnection conn;
+  final void Function(String table) onNewQuery;
+
+  @override
+  State<_SchemaTree> createState() => _SchemaTreeState();
+}
+
+class _SchemaTreeState extends State<_SchemaTree> {
+  late Future<List<String>> _tables;
+  final _openTables = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _tables = context.read<DatabaseViewModel>().tables(widget.conn);
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final typo = context.typo;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
-      child: HoverTap(
-        onTap: () => onTap(conn),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Icon(Icons.storage, size: 12, color: colors.text4),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+      padding: const EdgeInsets.only(left: 20, bottom: 4),
+      child: FutureBuilder<List<String>>(
+        future: _tables,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return _hint('Loading…');
+          }
+          if (snap.hasError) {
+            return _hint(_errorMessage(snap.error), error: true);
+          }
+          final tables = snap.data ?? const [];
+          if (tables.isEmpty) return _hint('No tables.');
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final t in tables) ...[
+                HoverTap(
+                  onTap: () => setState(() {
+                    if (!_openTables.remove(t)) _openTables.add(t);
+                  }),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 3,
+                  ),
+                  child: Row(
                     children: [
+                      Icon(
+                        _openTables.contains(t)
+                            ? Icons.expand_more
+                            : Icons.chevron_right,
+                        size: 13,
+                        color: colors.text4,
+                      ),
+                      const SizedBox(width: 3),
+                      Icon(Icons.table_chart, size: 11, color: colors.text4),
+                      const SizedBox(width: 6),
                       Flexible(
                         child: Text(
-                          conn.name,
+                          t,
                           overflow: TextOverflow.ellipsis,
-                          style: typo.body.copyWith(
-                            fontSize: 12.5,
+                          style: typo.mono.copyWith(
+                            fontSize: 11.5,
                             color: colors.text2,
                           ),
                         ),
                       ),
-                      if (conn.origin == DbConnectionOrigin.detected) ...[
-                        const SizedBox(width: 6),
-                        const _Chip('detected'),
-                      ],
-                      if (conn.origin == DbConnectionOrigin.local) ...[
-                        const SizedBox(width: 6),
-                        const _Chip('local'),
+                      const SizedBox(width: 4),
+                      AppTooltip(
+                        message: 'New query',
+                        child: HoverTap(
+                          onTap: () => widget.onNewQuery(t),
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.add,
+                            size: 12,
+                            color: colors.text4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_openTables.contains(t))
+                  _ColumnList(conn: widget.conn, table: t),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _hint(String text, {bool error = false}) => Padding(
+    padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+    child: Text(
+      text,
+      style: context.typo.label.copyWith(
+        fontSize: 10.5,
+        color: error ? context.colors.error : context.colors.text4,
+      ),
+    ),
+  );
+}
+
+class _ColumnList extends StatefulWidget {
+  const _ColumnList({required this.conn, required this.table});
+  final DbConnection conn;
+  final String table;
+
+  @override
+  State<_ColumnList> createState() => _ColumnListState();
+}
+
+class _ColumnListState extends State<_ColumnList> {
+  late final Future<List<SchemaColumn>> _cols;
+
+  @override
+  void initState() {
+    super.initState();
+    _cols = context.read<DatabaseViewModel>().columns(
+      widget.conn,
+      widget.table,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final typo = context.typo;
+    return Padding(
+      padding: const EdgeInsets.only(left: 22),
+      child: FutureBuilder<List<SchemaColumn>>(
+        future: _cols,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 6),
+              child: Text(
+                'Loading…',
+                style: typo.label.copyWith(fontSize: 10, color: colors.text4),
+              ),
+            );
+          }
+          final cols = snap.data ?? const [];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final c in cols)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 1.5,
+                    horizontal: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          c.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: typo.mono.copyWith(
+                            fontSize: 11,
+                            color: colors.text2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        c.type,
+                        style: typo.mono.copyWith(
+                          fontSize: 9.5,
+                          color: colors.text4,
+                        ),
+                      ),
+                      if (c.primaryKey) ...[
+                        const SizedBox(width: 5),
+                        Text(
+                          'PK',
+                          style: typo.label.copyWith(
+                            fontSize: 8.5,
+                            color: colors.accent,
+                          ),
+                        ),
                       ],
                     ],
                   ),
-                  Text(
-                    '${conn.engine.label} · ${conn.displayTarget}',
-                    overflow: TextOverflow.ellipsis,
-                    style: typo.mono.copyWith(
-                      fontSize: 10,
-                      color: colors.text4,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 }
+
+String _errorMessage(Object? e) =>
+    e is DbQueryException ? e.message : e.toString();
 
 class _Chip extends StatelessWidget {
   const _Chip(this.label);

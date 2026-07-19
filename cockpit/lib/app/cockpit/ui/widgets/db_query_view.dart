@@ -7,6 +7,7 @@ import 'package:cockpit/app/cockpit/domain/entities/dbq_document.dart';
 import 'package:cockpit/app/cockpit/domain/entities/file_view.dart';
 import 'package:cockpit/app/cockpit/domain/entities/sql_statements.dart';
 import 'package:cockpit/app/cockpit/ui/session/file_viewer_session.dart';
+import 'package:cockpit/app/cockpit/ui/viewmodels/cockpit_viewmodel.dart';
 import 'package:cockpit/app/cockpit/ui/viewmodels/database_viewmodel.dart';
 import 'package:cockpit/app/core/ui/menu/editor_menu_bridge.dart';
 import 'package:cockpit/app/core/ui/themes/themes.dart';
@@ -78,6 +79,12 @@ class _DbQueryViewState extends State<DbQueryView> {
     _sql.addListener(_onEdited);
     widget.session.addListener(_onSession);
     widget.session.saveDraft = _save;
+    // Untitled nasce "unsaved" → acende a bolinha da tab de imediato.
+    if (widget.session.scratch) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.session.setDirty(true);
+      });
+    }
     // Garante o registro de conexões carregado mesmo sem o painel aberto.
     final vm = context.read<DatabaseViewModel>();
     Future.microtask(
@@ -112,6 +119,8 @@ class _DbQueryViewState extends State<DbQueryView> {
       DbqDocument(db: _connName, limit: _limit, sql: _sql.text);
 
   bool get _dirty {
+    // Untitled: sempre "unsaved" até o primeiro save (vira arquivo real).
+    if (widget.session.scratch) return true;
     final disk = DbqDocument.parse(_baseline);
     return disk.sql != _sql.text ||
         disk.db != _connName ||
@@ -130,6 +139,7 @@ class _DbQueryViewState extends State<DbQueryView> {
   /// sujo, adota o novo conteúdo e **re-executa** (decisão H — o agente salvou
   /// e o humano vê o resultado novo sem tocar em nada).
   void _onSession() {
+    if (widget.session.scratch) return; // untitled: nada vem do disco
     final text = _diskText();
     if (text == _baseline) return;
     if (widget.session.dirty) return; // edição local vence; não sobrescreve
@@ -146,6 +156,27 @@ class _DbQueryViewState extends State<DbQueryView> {
   Future<bool> _save() async {
     if (!_dirty) return true;
     final content = _current.serialize();
+    // Untitled: pede o nome e materializa o arquivo (VSCode-style).
+    if (widget.session.scratch) {
+      final name = await _promptName();
+      if (name == null || !mounted) return false;
+      final result = await context.read<CockpitViewModel>().saveScratchAs(
+        widget.session.id,
+        name,
+        content,
+      );
+      if (!mounted) return false;
+      final error = result.fold((_) => null, (f) => f);
+      if (error != null) {
+        _showSaveError(error);
+        return false;
+      }
+      // saveScratchAs já retargou a sessão e limpou o scratch; baseline agora
+      // é o conteúdo salvo.
+      setState(() => _baseline = content);
+      _syncDirty();
+      return true;
+    }
     final ok = await widget.onSave(content);
     if (!mounted) return ok;
     if (ok) {
@@ -153,6 +184,79 @@ class _DbQueryViewState extends State<DbQueryView> {
       _syncDirty();
     }
     return ok;
+  }
+
+  /// Prompt de nome do arquivo (só o basename; `.dbq` é anexado pela VM).
+  Future<String?> _promptName() {
+    final ctrl = TextEditingController(text: 'query.dbq');
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        final colors = context.colors;
+        return AlertDialog(
+          title: Text(
+            'Save query as',
+            style: context.typo.title.copyWith(
+              fontSize: 15,
+              color: colors.text,
+            ),
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: TextField(
+              controller: ctrl,
+              autofocus: true,
+              style: context.typo.mono.copyWith(
+                fontSize: 12.5,
+                color: colors.text,
+              ),
+              border: Border.all(color: colors.border),
+              borderRadius: BorderRadius.circular(6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              onSubmitted: (v) => Navigator.of(context).pop(v),
+            ),
+          ),
+          actions: [
+            GhostButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            PrimaryButton(
+              onPressed: () => Navigator.of(context).pop(ctrl.text),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showSaveError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          'Could not save',
+          style: context.typo.title.copyWith(
+            fontSize: 15,
+            color: context.colors.text,
+          ),
+        ),
+        content: Text(
+          message,
+          style: context.typo.body.copyWith(
+            fontSize: 13,
+            color: context.colors.text2,
+          ),
+        ),
+        actions: [
+          PrimaryButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _discard() {
@@ -171,9 +275,13 @@ class _DbQueryViewState extends State<DbQueryView> {
     final connName = _connName;
     if (connName == null) return; // topbar mostra "Select database"
 
-    // Run salva primeiro — o arquivo é a fonte de verdade (agente lê o mesmo).
-    if (_dirty && !await _save()) return;
-    if (!mounted) return;
+    // Arquivo real: Run salva primeiro (o arquivo é a fonte de verdade que o
+    // agente lê). Untitled: executa o buffer direto, SEM forçar save — só
+    // materializa em disco quando o usuário mandar salvar.
+    if (!widget.session.scratch) {
+      if (_dirty && !await _save()) return;
+      if (!mounted) return;
+    }
 
     // Semântica dos clients (DataGrip/DBeaver): Run = statement sob o
     // cursor; com seleção = os statements que ela TOCA (expandidos — nunca
