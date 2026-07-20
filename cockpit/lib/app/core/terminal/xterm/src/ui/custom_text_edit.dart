@@ -204,6 +204,16 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   late var _currentEditingState = _initEditingState.copyWith();
 
+  /// The most recent text committed by the IME for this editing transaction.
+  ///
+  /// macOS can send the final, non-composing [TextEditingValue] more than once
+  /// while it settles a dead key or an accented character. Since a terminal
+  /// resets its hidden editing buffer after every commit, treating every one of
+  /// those callbacks as new text writes the same character to the PTY repeatedly.
+  /// The platform acknowledges the reset with [_initEditingState] (or starts a
+  /// new composing range), which opens the next transaction.
+  String? _committedText;
+
   @override
   TextEditingValue? get currentTextEditingValue {
     return _currentEditingState;
@@ -220,6 +230,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     // Get input after composing is done
     if (!_currentEditingState.composing.isCollapsed) {
+      _committedText = null;
       final text = _currentEditingState.text;
       final composingText = _currentEditingState.composing.textInside(text);
       widget.onComposing(composingText);
@@ -228,14 +239,27 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     widget.onComposing(null);
 
+    // This is the acknowledgement of the hidden buffer reset. It also makes a
+    // second, identical character typed later a distinct input transaction.
+    if (_currentEditingState.text == _initEditingState.text) {
+      _committedText = null;
+      return;
+    }
+
     if (_currentEditingState.text.length < _initEditingState.text.length) {
+      _committedText = null;
       widget.onDelete();
     } else {
       final textDelta = _currentEditingState.text.substring(
         _initEditingState.text.length,
       );
 
-      widget.onInsert(textDelta);
+      // IMEs may repeat the same committed value after the terminal has asked
+      // them to restore the empty editing state. Emit that commit only once.
+      if (textDelta != _committedText) {
+        _committedText = textDelta;
+        widget.onInsert(textDelta);
+      }
     }
 
     // Reset editing state if composing is done
