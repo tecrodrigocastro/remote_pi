@@ -29,10 +29,10 @@ packages:
     dependency: "direct main"
     description:
       name: anaki_mysql
-      sha256: e6826dfe15c7b2b33c375c6c94f7b1388c073dea73f40f13eeb67907ee4b4d0a
+      sha256: "41cfdb15e6950039d36eb74e71e61ee208cead75e5d8b1ae91ebf2ef70430cd8"
       url: "https://pub.dev"
     source: hosted
-    version: "0.1.5"
+    version: "0.1.6"
   anaki_orm:
     dependency: "direct main"
     description:
