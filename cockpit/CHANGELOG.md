@@ -14,6 +14,28 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
   meio da frase).
 -->
 
+## [1.14.0] — 2026-07-20
+
+Motores internalizados (terminal, PTY, frontmatter), CLI cria abas de
+terminal e melhorias de multirepo/UI.
+
+### Added
+- **CLI `cockpit new-tab`:** agentes abrem abas de terminal (cwd, título,
+  split) de dentro dos panes.
+- **Multirepo:** Files volta à árvore única com seções por repo + popup de
+  branches no badge da rail.
+
+### Changed
+- **Motores absorvidos pro repo:** emulador de terminal (xterm) virou módulo
+  interno; PTY nativo virou o plugin `cockpit_pty`; frontmatter YAML do
+  markdown agora é pré-processamento próprio. Zero forks git no pubspec —
+  markdown vem do pub.dev 1.1.8 (fix de links consecutivos incluso).
+
+### Fixed
+- Source Control mostrava pasta nova como arquivo; play/stop de Tasks sem
+  resposta imediata; submenu e tooltips desalinhados sob zoom da interface;
+  atalho ⌘`/⌘⇧` de realm parava após o primeiro uso.
+
 ## [1.13.0] — 2026-07-19
 
 Novo: browsers visuais de Redis e MongoDB na tab Database — tabela de chaves
