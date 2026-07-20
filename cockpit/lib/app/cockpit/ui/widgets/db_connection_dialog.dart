@@ -119,6 +119,11 @@ class _DbConnectionDialogState extends State<DbConnectionDialog> {
       savePassword: _savePassword,
       access: access,
       agents: _visibleToAgents,
+      // Edição de conexão Atlas: preserva o formato SRV e os query params da
+      // URL original (o form não os expõe; reescrever pra mongodb://host:port
+      // quebraria a conexão).
+      srv: widget.initial?.isSrv ?? false,
+      query: widget.initial?.urlQuery ?? '',
     );
   }
 

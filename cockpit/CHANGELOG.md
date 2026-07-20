@@ -14,6 +14,19 @@ As versões seguem o `version:` do `pubspec.yaml` (SSOT). O campo `notes` do
   meio da frase).
 -->
 
+## [1.14.1] — 2026-07-20
+
+Fixes no painel Database (Mongo Atlas).
+
+### Fixed
+- **Mongo Atlas (`mongodb+srv://`):** URLs SRV agora são reconhecidas; antes
+  a entrada era tratada como engine desconhecido.
+- **Painel Database:** uma conexão inválida no `databases.json` zerava a
+  lista inteira; agora só a entrada com problema é pulada.
+- **Editar conexão Atlas:** o dialog preserva o formato SRV e os query
+  params da URL (antes reescrevia pra `mongodb://host:porta` e quebrava a
+  conexão).
+
 ## [1.14.0] — 2026-07-20
 
 Motores internalizados (terminal, PTY, frontmatter), CLI cria abas de

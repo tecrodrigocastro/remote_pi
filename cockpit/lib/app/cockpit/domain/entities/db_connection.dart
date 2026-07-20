@@ -42,6 +42,8 @@ enum DbEngine {
   String get scheme => this == DbEngine.mongo ? 'mongodb' : name;
 
   static DbEngine? fromScheme(String scheme) {
+    // Atlas/SRV: variante oficial do scheme Mongo (DNS seed list).
+    if (scheme == 'mongodb+srv') return DbEngine.mongo;
     for (final e in DbEngine.values) {
       if (e.scheme == scheme) return e;
     }
@@ -125,8 +127,13 @@ class DbConnection {
     DbConnectionOrigin origin = DbConnectionOrigin.registered,
     DbAccess access = DbAccess.read,
     bool agents = true,
+    bool srv = false,
+    String query = '',
   }) {
-    final p = port ?? engine.defaultPort;
+    // SRV (Atlas): scheme `mongodb+srv` e URL sem porta (proibida no formato).
+    final scheme = srv ? 'mongodb+srv' : engine.scheme;
+    final p = srv ? '' : ':${port ?? engine.defaultPort}';
+    final q = query.isEmpty ? '' : '?$query';
     final hasPass = password != null && password.isNotEmpty;
     final auth = user.isEmpty && !hasPass
         ? ''
@@ -135,7 +142,7 @@ class DbConnection {
     return DbConnection(
       name: name,
       engine: engine,
-      url: '${engine.scheme}://$auth$host:$p/${Uri.encodeComponent(database)}',
+      url: '$scheme://$auth$host$p/${Uri.encodeComponent(database)}$q',
       savePassword: savePassword,
       origin: origin,
       access: access,
@@ -205,9 +212,18 @@ class DbConnection {
     return ix < 0 ? null : Uri.decodeComponent(ui.substring(ix + 1));
   }
 
-  /// Alvo curto pra exibição na lista do painel (path ou host:porta).
-  String get displayTarget =>
-      engine == DbEngine.sqlite ? sqlitePath : '$host:$port';
+  /// URL Mongo em formato SRV (Atlas, `mongodb+srv://`) — sem porta na URL e
+  /// resolução por DNS seed list. Preservado no round-trip do dialog.
+  bool get isSrv => url.startsWith('mongodb+srv://');
+
+  /// Query string da URL (`retryWrites=true&...`) — preservada na edição.
+  String get urlQuery => _uri.query;
+
+  /// Alvo curto pra exibição na lista do painel (path ou host:porta; SRV não
+  /// tem porta).
+  String get displayTarget => engine == DbEngine.sqlite
+      ? sqlitePath
+      : (isSrv ? host : '$host:$port');
 
   Map<String, Object?> toJson() => {
     'name': name,

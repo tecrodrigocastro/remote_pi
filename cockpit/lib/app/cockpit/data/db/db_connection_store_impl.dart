@@ -85,11 +85,20 @@ class DbConnectionStoreImpl implements DbConnectionStore {
       final decoded = jsonDecode(await file.readAsString());
       final list = decoded is Map ? decoded['databases'] : decoded;
       if (list is! List) return const [];
-      return [
-        for (final e in list)
-          if (e is Map)
+      final out = <DbConnection>[];
+      for (final e in list) {
+        if (e is! Map) continue;
+        try {
+          out.add(
             DbConnection.fromJson(Map<String, Object?>.from(e), origin: origin),
-      ];
+          );
+        } on FormatException {
+          // Entrada inválida (URL de engine desconhecido, edição manual) não
+          // pode derrubar as demais conexões do arquivo — pula só ela.
+          continue;
+        }
+      }
+      return out;
     } on FormatException {
       // JSON quebrado (edição manual) não pode derrubar o painel — lista
       // vazia; o usuário corrige o arquivo no próprio editor.
