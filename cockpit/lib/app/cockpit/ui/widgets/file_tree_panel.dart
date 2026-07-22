@@ -63,6 +63,10 @@ class FileTreePanel extends StatefulWidget {
     required this.onRename,
     required this.onDelete,
     required this.onMove,
+    required this.onCopy,
+    required this.onCut,
+    required this.onPaste,
+    required this.canPaste,
     this.width = 300,
     this.footer,
     this.searchPanel,
@@ -179,6 +183,18 @@ class FileTreePanel extends StatefulWidget {
   /// Move [path] pra dentro de [targetDir] (drag-and-drop na árvore).
   final Future<Result<void, String>> Function(String path, String targetDir)
   onMove;
+
+  /// Marca [path] pra copiar (Cmd+C / menu). O paste duplica.
+  final ValueChanged<String> onCopy;
+
+  /// Marca [path] pra recortar (Cmd+X / menu). O paste move.
+  final ValueChanged<String> onCut;
+
+  /// Cola o item do clipboard dentro de [targetDir] (Cmd+V / menu).
+  final Future<Result<void, String>> Function(String targetDir) onPaste;
+
+  /// Há algo no clipboard pra colar — habilita o item "Paste" e o Cmd+V.
+  final bool canPaste;
 
   /// Largura do painel (arrastável pela página — não persistido).
   final double width;
@@ -505,6 +521,39 @@ class _FileTreePanelState extends State<FileTreePanel> {
     }, (e) => showInfoDialog(context, title: 'Could not move', message: e));
   }
 
+  // ---- copiar / recortar / colar --------------------------------------------
+
+  /// Cola o clipboard dentro de [targetDir] (menu de pasta, ou resolvido pelo
+  /// atalho). Falha vira dialog; a árvore recarrega pela revisão da VM.
+  Future<void> _requestPaste(String targetDir) async {
+    final r = await widget.onPaste(targetDir);
+    if (!mounted) return;
+    r.fold(
+      (_) {},
+      (e) => showInfoDialog(context, title: 'Could not paste', message: e),
+    );
+  }
+
+  /// Pasta-alvo do paste via atalho: a pasta selecionada, a pasta-mãe do arquivo
+  /// selecionado, ou a raiz do workspace (mesma lógica do New file/folder).
+  String? _pasteTarget() => _headerCreateTarget();
+
+  void _copySelected() {
+    final p = _selectedPath;
+    if (p != null && !_editing) widget.onCopy(p);
+  }
+
+  void _cutSelected() {
+    final p = _selectedPath;
+    if (p != null && !_editing) widget.onCut(p);
+  }
+
+  void _pasteSelected() {
+    if (_editing || !widget.canPaste) return;
+    final target = _pasteTarget();
+    if (target != null && target.isNotEmpty) _requestPaste(target);
+  }
+
   // ---- atalhos de teclado ---------------------------------------------------
 
   bool get _editing => _pending != null || _renaming != null;
@@ -523,10 +572,32 @@ class _FileTreePanelState extends State<FileTreePanel> {
   /// bubbling até um `CallbackShortcuts` ancestral). Delete/Backspace apagam;
   /// Enter (macOS) / F2 (Win/Linux) renomeiam o selecionado.
   KeyEventResult _onTreeKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent || _editing || _selectedPath == null) {
+    if (event is! KeyDownEvent || _editing) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+
+    // Copiar / recortar / colar (Cmd no macOS, Ctrl no resto). Paste dispensa
+    // seleção (cai na raiz); copy/cut exigem um item selecionado.
+    final mod = HardwareKeyboard.instance;
+    final accel = Platform.isMacOS
+        ? mod.isMetaPressed
+        : mod.isControlPressed;
+    if (accel) {
+      if (key == LogicalKeyboardKey.keyC && _selectedPath != null) {
+        _copySelected();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyX && _selectedPath != null) {
+        _cutSelected();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyV && widget.canPaste) {
+        _pasteSelected();
+        return KeyEventResult.handled;
+      }
       return KeyEventResult.ignored;
     }
-    final key = event.logicalKey;
+
+    if (_selectedPath == null) return KeyEventResult.ignored;
     final isDelete =
         key == LogicalKeyboardKey.delete ||
         (Platform.isMacOS && key == LogicalKeyboardKey.backspace);
@@ -572,6 +643,10 @@ class _FileTreePanelState extends State<FileTreePanel> {
       onCommitRename: _commitRename,
       onRequestDelete: _requestDelete,
       onRequestMove: _requestMove,
+      onCopy: widget.onCopy,
+      onCut: widget.onCut,
+      onRequestPaste: _requestPaste,
+      canPaste: widget.canPaste,
       onShowDiff: widget.onOpenDiff,
       gitStatusOf: widget.gitStatusOf,
       listChildren: widget.listChildren,
@@ -782,6 +857,10 @@ class _TreeEdit {
     required this.onCommitRename,
     required this.onRequestDelete,
     required this.onRequestMove,
+    required this.onCopy,
+    required this.onCut,
+    required this.onRequestPaste,
+    required this.canPaste,
     required this.onShowDiff,
     required this.gitStatusOf,
     required this.listChildren,
@@ -819,6 +898,16 @@ class _TreeEdit {
 
   /// Drop de um caminho arrastado numa pasta-alvo → move pra dentro dela.
   final void Function(String path, String targetDir) onRequestMove;
+
+  /// Copiar / recortar o caminho pro clipboard interno da árvore.
+  final ValueChanged<String> onCopy;
+  final ValueChanged<String> onCut;
+
+  /// Colar o item do clipboard dentro de [targetDir].
+  final void Function(String targetDir) onRequestPaste;
+
+  /// Habilita o item "Paste" no menu de contexto.
+  final bool canPaste;
 
   final GitFileStatus? Function(String absolutePath) gitStatusOf;
   final Future<List<FileNode>> Function(String path) listChildren;
@@ -928,6 +1017,11 @@ class _DirViewState extends State<_DirView> {
                 onCancelRename: edit.onCancelRename,
                 onDelete: () => edit.onRequestDelete(node.path),
                 onShowDiff: () => edit.onShowDiff(node.path),
+                onCopy: () => edit.onCopy(node.path),
+                onCut: () => edit.onCut(node.path),
+                // Arquivo cola na pasta-mãe.
+                onPaste: () => edit.onRequestPaste(widget.path),
+                canPaste: edit.canPaste,
               ),
             ),
       ],
@@ -1017,6 +1111,11 @@ class _FolderState extends State<_Folder> {
           onCommitRename: (name) => edit.onCommitRename(widget.node.path, name),
           onCancelRename: edit.onCancelRename,
           onDelete: () => edit.onRequestDelete(widget.node.path),
+          onCopy: () => edit.onCopy(widget.node.path),
+          onCut: () => edit.onCut(widget.node.path),
+          // Pasta cola dentro de si mesma.
+          onPaste: () => edit.onRequestPaste(widget.node.path),
+          canPaste: edit.canPaste,
           onTap: () {
             edit.onSelect(widget.node.path, true);
             setState(() => _expanded = !_expanded);
@@ -1064,6 +1163,10 @@ class _Row extends StatefulWidget {
     this.onCancelRename,
     this.onDelete,
     this.onShowDiff,
+    this.onCopy,
+    this.onCut,
+    this.onPaste,
+    this.canPaste = false,
   });
 
   final int depth;
@@ -1097,6 +1200,17 @@ class _Row extends StatefulWidget {
 
   /// "Show git diff" (só arquivos). `null` em pastas.
   final VoidCallback? onShowDiff;
+
+  /// Copiar / recortar este item pro clipboard interno da árvore.
+  final VoidCallback? onCopy;
+  final VoidCallback? onCut;
+
+  /// Colar o clipboard tendo este item como âncora (pasta → dentro dela;
+  /// arquivo → na pasta-mãe). `null` desabilita o item.
+  final VoidCallback? onPaste;
+
+  /// Há algo no clipboard — habilita o item "Paste" no menu.
+  final bool canPaste;
 
   @override
   State<_Row> createState() => _RowState();
@@ -1206,6 +1320,22 @@ class _RowState extends State<_Row> {
           icon: Icons.delete_outline,
         ),
         const AppMenuItem(
+          value: 'copy',
+          label: 'Copy',
+          icon: Icons.copy_all_outlined,
+        ),
+        const AppMenuItem(
+          value: 'cut',
+          label: 'Cut',
+          icon: Icons.content_cut,
+        ),
+        AppMenuItem(
+          value: 'paste',
+          label: 'Paste',
+          icon: Icons.content_paste,
+          enabled: widget.canPaste,
+        ),
+        const AppMenuItem(
           value: 'rel',
           label: 'Copy relative path',
           icon: Icons.content_copy_outlined,
@@ -1237,6 +1367,12 @@ class _RowState extends State<_Row> {
           widget.onStartRename?.call();
         case 'delete':
           widget.onDelete?.call();
+        case 'copy':
+          widget.onCopy?.call();
+        case 'cut':
+          widget.onCut?.call();
+        case 'paste':
+          widget.onPaste?.call();
         case 'rel':
           Clipboard.setData(ClipboardData(text: _relative));
         case 'abs':

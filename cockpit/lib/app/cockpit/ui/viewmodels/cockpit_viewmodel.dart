@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File, Platform;
+import 'dart:io' show File, FileSystemEntity, FileSystemEntityType, Platform;
 import 'dart:math' show max;
 
 import 'package:cockpit/app/core/data/setup/remote_pi_resolver.dart';
@@ -1268,6 +1268,78 @@ class CockpitViewModel extends ChangeNotifier {
     if (r.isSuccess) _bumpFileTree();
     return r;
   }
+
+  // ---- clipboard da árvore (copiar / recortar / colar) ----------------------
+
+  /// Caminho no clipboard interno da árvore (`null` = vazio). Set por
+  /// [copyToClipboard] / [cutToClipboard], consumido por [pasteInto].
+  String? _clipboardPath;
+
+  /// `true` = recortar (move no paste), `false` = copiar (duplica no paste).
+  bool _clipboardCut = false;
+
+  /// Há algo pronto pra colar? Usado pra habilitar o item "Paste" no menu.
+  bool get canPaste => _clipboardPath != null;
+
+  /// Marca [path] pra **copiar** (o paste duplica).
+  void copyToClipboard(String path) {
+    _clipboardPath = path;
+    _clipboardCut = false;
+    notifyListeners();
+  }
+
+  /// Marca [path] pra **recortar** (o paste move e limpa o clipboard).
+  void cutToClipboard(String path) {
+    _clipboardPath = path;
+    _clipboardCut = true;
+    notifyListeners();
+  }
+
+  /// Cola o item do clipboard **dentro** de [targetDir]. Copia ou move conforme
+  /// o modo. Se o nome colidir no destino, gera um sufixo (`nome copy`,
+  /// `nome copy 2`, ...). Recorte limpa o clipboard no sucesso; cópia mantém
+  /// (permite colar várias vezes). Abas abertas seguem no move, como no rename.
+  Future<Result<void, String>> pasteInto(String targetDir) async {
+    final from = _clipboardPath;
+    if (from == null) return const Failure('Clipboard is empty.');
+    final name = from.split('/').where((p) => p.isNotEmpty).lastOrNull;
+    if (name == null) return const Failure('Invalid path.');
+    if (_clipboardCut && _isUnder(targetDir, from)) {
+      return const Failure('Cannot move a folder into itself.');
+    }
+    final to = await _uniqueDest(targetDir, name);
+    final r = _clipboardCut
+        ? await _fileMutator.rename(from, to)
+        : await _fileMutator.copy(from, to);
+    if (r.isSuccess) {
+      if (_clipboardCut) {
+        await _retargetSessions(from, to);
+        _clipboardPath = null;
+      }
+      _bumpFileTree();
+    }
+    return r;
+  }
+
+  /// Caminho livre em [dir] pra [name]: devolve `dir/name` se não existir, senão
+  /// insere ` copy`, ` copy 2`, ... antes da extensão até achar um livre.
+  Future<String> _uniqueDest(String dir, String name) async {
+    var candidate = _join(dir, name);
+    if (!await _pathExists(candidate)) return candidate;
+    final dot = name.lastIndexOf('.');
+    final hasExt = dot > 0;
+    final stem = hasExt ? name.substring(0, dot) : name;
+    final ext = hasExt ? name.substring(dot) : '';
+    for (var i = 1;; i++) {
+      final suffix = i == 1 ? ' copy' : ' copy $i';
+      candidate = _join(dir, '$stem$suffix$ext');
+      if (!await _pathExists(candidate)) return candidate;
+    }
+  }
+
+  Future<bool> _pathExists(String path) async =>
+      await FileSystemEntity.type(path, followLinks: false) !=
+      FileSystemEntityType.notFound;
 
   void _bumpFileTree() {
     _fileTreeRevision++;
