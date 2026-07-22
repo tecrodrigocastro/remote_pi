@@ -841,6 +841,10 @@ class _CockpitPageState extends State<CockpitPage> {
                             onRename: vm.renamePath,
                             onDelete: vm.deletePath,
                             onMove: vm.movePath,
+                            onCopy: vm.copyToClipboard,
+                            onCut: vm.cutToClipboard,
+                            onPaste: vm.pasteInto,
+                            canPaste: vm.canPaste,
                             searchPanel: vm.selectedProject == null
                                 ? null
                                 : ContentSearchPanel(
